@@ -1,0 +1,25 @@
+{
+  "name": "little-steps-home",
+  "version": "0.0.1",
+  "description": "Help the puppy navigate energy games!",
+  "type": "module",
+  "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "copy-webpack-plugin": "^13.0.1",
+    "eslint": "^10.0.1",
+    "expose-loader": "^5.0.1",
+    "ts-loader": "^9.5.4",
+    "typescript": "^5.9.3",
+    "webpack": "^5.102.1",
+    "webpack-cli": "^6.0.1",
+    "webpack-dev-server": "^5.2.3"
+  },
+  "dependencies": {
+    "phaser": "^3.90.0"
+  },
+  "scripts": {
+    "dev": "webpack serve --mode development",
+    "build": "webpack --mode production",
+    "lint": "eslint ."
+  }
+}
