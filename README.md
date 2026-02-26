@@ -4,6 +4,11 @@
 The player must manage limited resources while navigating through different paths.
 Each choice affects the available resources and determines whether the puppy can reach home.
 
+## Deployment
+Once code is merged into the main branch, you can view the product of the main branch in the deployed GitHub page
+
+https://equivio.github.io/little-steps/
+
 ## Setup
 
 - Install dependencies: `npm install`
