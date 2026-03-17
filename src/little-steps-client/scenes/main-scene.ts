@@ -9,7 +9,15 @@ export class MainScene extends Phaser.Scene {
     private puppy!: Phaser.GameObjects.Sprite;
     private currentNodeId!: number;
     private isMoving = false;
+    
+    private isFogOfWar = false;
+    private revealedNodes: Set<number> = new Set();
+    
     private nodeGraphicsMap: Map<number, Phaser.GameObjects.Arc> = new Map();
+    private nodeTextsMap: Map<number, Phaser.GameObjects.Text> = new Map();
+    private edgeGraphicsMap: Map<string, Phaser.GameObjects.Graphics> = new Map();
+    private edgeTextsMap: Map<string, Phaser.GameObjects.Text> = new Map();
+    
     private currentResources!: ResourceVector;
 
     constructor() {
@@ -22,7 +30,14 @@ export class MainScene extends Phaser.Scene {
         this.graph = this.level.nodes;
         this.currentNodeId = this.level.startNodeId;
         this.isMoving = false;
+        
+        this.isFogOfWar = this.level.id === 'gradual-reveal';
+        
+        this.revealedNodes.clear();
         this.nodeGraphicsMap.clear();
+        this.nodeTextsMap.clear();
+        this.edgeGraphicsMap.clear();
+        this.edgeTextsMap.clear();
     }
 
     preload(): void {
@@ -42,6 +57,16 @@ export class MainScene extends Phaser.Scene {
 
         this.drawGraph();
         
+        if (this.isFogOfWar) {
+            this.nodeGraphicsMap.forEach(c => c.setAlpha(0));
+            this.nodeTextsMap.forEach(t => t.setAlpha(0));
+            this.edgeGraphicsMap.forEach(g => g.setAlpha(0));
+            this.edgeTextsMap.forEach(t => t.setAlpha(0));
+
+            this.revealNode(this.currentNodeId, false);
+            this.revealEdgesFrom(this.currentNodeId, false);
+        }
+
         this.add.text(18, 600, `Level: ${this.level.title}`, { color: '#f6f8ff', fontSize: '14px' });
 
         const start = this.graph.find(n => n.id === this.currentNodeId)!;
@@ -53,6 +78,47 @@ export class MainScene extends Phaser.Scene {
         this.registry.set('nodeType', start.type);
 
         this.highlightPossibleMoves();
+    }
+
+    private revealNode(nodeId: number, animate: boolean): void {
+        if (!this.revealedNodes.has(nodeId)) {
+            this.revealedNodes.add(nodeId);
+            const circle = this.nodeGraphicsMap.get(nodeId);
+            const txt = this.nodeTextsMap.get(nodeId);
+            
+            if (circle) {
+                if (animate) {
+                    const targets = txt ? [circle, txt] : [circle];
+                    this.tweens.add({ targets, alpha: 1, duration: 600 });
+                } else {
+                    circle.setAlpha(1);
+                    if (txt) txt.setAlpha(1);
+                }
+            }
+        }
+    }
+
+    private revealEdgesFrom(nodeId: number, animate: boolean): void {
+        const node = this.graph.find(n => n.id === nodeId);
+        if (!node) return;
+
+        for (const edge of node.neighbors) {
+            const edgeKey = `${node.id}-${edge.targetId}`;
+            const g = this.edgeGraphicsMap.get(edgeKey);
+            const t = this.edgeTextsMap.get(edgeKey);
+            
+            if (g && g.alpha === 0) {
+                if (animate) {
+                    const targets = t ? [g, t] : [g];
+                    this.tweens.add({ targets, alpha: 1, duration: 600 });
+                } else {
+                    g.setAlpha(1);
+                    if (t) t.setAlpha(1);
+                }
+            }
+            
+            this.revealNode(edge.targetId, animate);
+        }
     }
 
     private formatEffects(effects: ResourceEffect[] | undefined): string {
@@ -112,6 +178,10 @@ export class MainScene extends Phaser.Scene {
                     this.registry.set('resources', this.currentResources);
                 }
 
+                if (this.isFogOfWar) {
+                    this.revealEdgesFrom(targetNodeId, true);
+                }
+
                 this.isMoving = false;
 
                 if (this.currentNodeId === this.level.goalNodeId) {
@@ -143,8 +213,6 @@ export class MainScene extends Phaser.Scene {
     }
 
     private drawGraph(): void {
-        const edgeGraphics = this.add.graphics();
-
         for (const node of this.graph) {
             for (const edge of node.neighbors) {
                 const neighbor = this.graph.find(n => n.id === edge.targetId)!;
@@ -156,27 +224,32 @@ export class MainScene extends Phaser.Scene {
                 const endX = neighbor.x + Math.cos(angle - Math.PI / 2) * offset;
                 const endY = neighbor.y + Math.sin(angle - Math.PI / 2) * offset;
 
-                edgeGraphics.lineStyle(4, 0x87a1ff, 0.6);
-                edgeGraphics.beginPath();
-                edgeGraphics.moveTo(startX, startY);
-                edgeGraphics.lineTo(endX, endY);
-                edgeGraphics.strokePath();
+                const graphics = this.add.graphics();
+                graphics.lineStyle(4, 0x87a1ff, 0.6);
+                graphics.beginPath();
+                graphics.moveTo(startX, startY);
+                graphics.lineTo(endX, endY);
+                graphics.strokePath();
 
                 const arrowX = startX + (endX - startX) * 0.65;
                 const arrowY = startY + (endY - startY) * 0.65;
-                edgeGraphics.fillStyle(0x87a1ff, 0.9);
+                graphics.fillStyle(0x87a1ff, 0.9);
                 const arrowSize = 10;
-                edgeGraphics.fillTriangle(
+                graphics.fillTriangle(
                     arrowX + Math.cos(angle) * arrowSize, arrowY + Math.sin(angle) * arrowSize,
                     arrowX + Math.cos(angle + Math.PI * 0.8) * arrowSize, arrowY + Math.sin(angle + Math.PI * 0.8) * arrowSize,
                     arrowX + Math.cos(angle - Math.PI * 0.8) * arrowSize, arrowY + Math.sin(angle - Math.PI * 0.8) * arrowSize
                 );
 
+                const edgeKey = `${node.id}-${edge.targetId}`;
+                this.edgeGraphicsMap.set(edgeKey, graphics);
+
                 const effectStr = this.formatEffects(edge.effects);
                 if (effectStr !== '') {
-                    this.add.text(startX + (endX - startX) * 0.35, startY + (endY - startY) * 0.35, effectStr, {
+                    const text = this.add.text(startX + (endX - startX) * 0.35, startY + (endY - startY) * 0.35, effectStr, {
                         color: '#ffaaaa', fontSize: '12px', fontStyle: 'bold', stroke: '#121a2f', strokeThickness: 4
                     }).setOrigin(0.5);
+                    this.edgeTextsMap.set(edgeKey, text);
                 }
             }
         }
@@ -190,10 +263,13 @@ export class MainScene extends Phaser.Scene {
             const nodeCircle = this.add.circle(node.x, node.y, 24, fill);
             nodeCircle.setStrokeStyle(2, 0xffffff, 0.5);
             nodeCircle.setInteractive({ useHandCursor: true });
+            
             this.nodeGraphicsMap.set(node.id, nodeCircle);
 
             nodeCircle.on('pointerover', () => {
+                if (this.isFogOfWar && !this.revealedNodes.has(node.id)) return;
                 if (this.registry.get('goalReached') || this.isMoving) return;
+                
                 const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
                 const edge = currentNode.neighbors.find(e => e.targetId === node.id);
                 if (edge) {
@@ -204,17 +280,23 @@ export class MainScene extends Phaser.Scene {
             });
 
             nodeCircle.on('pointerout', () => this.registry.set('preview', null));
-            nodeCircle.on('pointerdown', () => this.moveToNextNode(node.id));
+            
+            nodeCircle.on('pointerdown', () => {
+                if (this.isFogOfWar && !this.revealedNodes.has(node.id)) return;
+                this.moveToNextNode(node.id);
+            });
 
-            this.add.text(node.x, node.y, String(node.id), { color: '#ffffff', fontSize: '16px', fontStyle: 'bold' }).setOrigin(0.5);
+            const nodeText = this.add.text(node.x, node.y, String(node.id), { color: '#ffffff', fontSize: '16px', fontStyle: 'bold' }).setOrigin(0.5);
+            this.nodeTextsMap.set(node.id, nodeText);
         }
-        this.highlightPossibleMoves();
     }
 
     private highlightPossibleMoves(): void {
         const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
 
         this.nodeGraphicsMap.forEach((circle, id) => {
+            if (this.isFogOfWar && !this.revealedNodes.has(id)) return;
+
             const nodeData = this.graph.find(n => n.id === id)!;
             let defaultColor = 0x5e70b5;
             if (nodeData.type === NodeType.START) defaultColor = 0x53d98a;
