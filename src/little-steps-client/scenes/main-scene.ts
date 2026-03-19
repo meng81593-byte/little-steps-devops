@@ -41,12 +41,33 @@ export class MainScene extends Phaser.Scene {
     }
 
     preload(): void {
-        this.load.image('puppy_img', 'assets/puppy.png');
+        this.load.spritesheet('puppy_run', 'assets/Splayer_strip4.png', { 
+            frameWidth: 64, // 注意：如果你的狗出现残影或者被劈成两半，记得把这里改回 32！
+            frameHeight: 64 
+        });
+        this.load.image('town_tiles', 'assets/tilemap_packed.png');
+        this.load.tilemapTiledJSON('map', 'assets/map.json');
     }
 
     create(): void {
-        this.add.rectangle(0, 0, this.scale.width, this.scale.height, 0x121a2f).setOrigin(0, 0);
-
+        const map = this.make.tilemap({ key: 'map' });
+        const tileset = map.addTilesetImage('town_tiles', 'town_tiles'); 
+        
+        if (tileset) {
+            const bgLayer = map.createLayer('background', tileset, 0, 0);
+            const mgLayer = map.createLayer('midground', tileset, 0, 0);
+            const fgLayer = map.createLayer('foreground', tileset, 0, 0); 
+            if (bgLayer) {
+                 bgLayer.setScale(2.5);
+            }
+            if (mgLayer) {
+                 mgLayer.setScale(2.5);
+            }
+            if (fgLayer) {
+                 fgLayer.setScale(2.5);
+            }
+        }
+        
         this.currentResources = { ...this.level.initialResources };
         this.registry.set('resources', this.currentResources);
         this.registry.set('preview', null);
@@ -71,12 +92,24 @@ export class MainScene extends Phaser.Scene {
 
         const start = this.graph.find(n => n.id === this.currentNodeId)!;
 
-        this.puppy = this.add.sprite(start.x, start.y, 'puppy_img');
-        this.puppy.setScale(0.2);
+        this.puppy = this.add.sprite(start.x, start.y, 'puppy_run');
+        this.puppy.setScale(1.5); 
         this.puppy.setDepth(10);
 
-        this.registry.set('nodeType', start.type);
+        this.anims.create({
+            key: 'walk',
+            frames: this.anims.generateFrameNumbers('puppy_run', { start: 0, end: 3 }), 
+            frameRate: 4, 
+            repeat: -1   
+        });
 
+        this.anims.create({
+            key: 'idle',
+            frames: [{ key: 'puppy_run', frame: 0 }], 
+            frameRate: 10
+        });
+        
+        this.registry.set('nodeType', start.type);
         this.highlightPossibleMoves();
     }
 
@@ -131,6 +164,7 @@ export class MainScene extends Phaser.Scene {
         }).join('\n');
     }
 
+
     private moveToNextNode(targetNodeId: number): void {
         if (this.isMoving) return;
 
@@ -160,57 +194,98 @@ export class MainScene extends Phaser.Scene {
         this.currentResources = nextResources;
         this.registry.set('resources', this.currentResources);
 
-        const target = this.graph.find(n => n.id === targetNodeId)!;
+        const targetNode = this.graph.find(n => n.id === targetNodeId)!;
 
-        this.tweens.add({
-            targets: this.puppy,
-            x: target.x,
-            y: target.y,
-            duration: 600,
-            ease: 'Power2',
-            onComplete: () => {
-                this.currentNodeId = targetNodeId;
-                this.registry.set('node', this.currentNodeId);
-                this.registry.set('nodeType', target.type);
-
-                if (target.nodeEffects && target.nodeEffects.length > 0) {
-                    this.currentResources = applyEffects(this.currentResources, target.nodeEffects, this.level.maxResources);
-                    this.registry.set('resources', this.currentResources);
-                }
-
-                if (this.isFogOfWar) {
-                    this.revealEdgesFrom(targetNodeId, true);
-                }
-
-                this.isMoving = false;
-
-                if (this.currentNodeId === this.level.goalNodeId) {
-                    this.registry.set('goalReached', true);
-                    this.highlightPossibleMoves();
-                } else {
-                    const autoMoved = this.checkAutoMove();
-                    if (!autoMoved) {
-                        this.highlightPossibleMoves();
-                    }
-                }
+        if (edge.pathNodes && edge.pathNodes.length > 0) {
+            this.moveAlongPath(edge.pathNodes, targetNode);
+        } else {
+            if (targetNode.x < this.puppy.x) {
+                this.puppy.setFlipX(true);
+            } else if (targetNode.x > this.puppy.x) {
+                this.puppy.setFlipX(false);
             }
-        });
+            
+            this.puppy.play('walk');
+
+            this.tweens.add({
+                targets: this.puppy,
+                x: targetNode.x,
+                y: targetNode.y,
+                duration: 2500, 
+                ease: 'Power2',
+                onComplete: () => {
+                    this.handleMoveCompletion(targetNodeId, targetNode);
+                }
+            });
+        }
     }
 
-    private checkAutoMove(): boolean {
-        const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
-        
-        if (currentNode.type === NodeType.DEFENDER && currentNode.neighbors.length > 0) {
-            const edge = currentNode.neighbors[Math.floor(Math.random() * currentNode.neighbors.length)];
+    private moveAlongPath(path: {x: number, y: number}[], targetNode: GraphNode): void {
+        const moveStep = (index: number) => {
+            if (index >= path.length) {
+                this.handleMoveCompletion(targetNode.id, targetNode);
+                return;
+            }
+
+            const targetPoint = path[index];
+            const prevPoint = index > 0 ? path[index - 1] : this.puppy;
+
+            if (targetPoint.x < prevPoint.x - 2) {
+                this.puppy.setFlipX(true);
+            } else if (targetPoint.x > prevPoint.x + 2) {
+                this.puppy.setFlipX(false);
+            }
+
+            const distance = Phaser.Math.Distance.Between(this.puppy.x, this.puppy.y, targetPoint.x, targetPoint.y);
             
-            this.time.delayedCall(300, () => {
-                this.isMoving = false;
-                this.moveToNextNode(edge.targetId);
+            if (distance < 2) {
+                moveStep(index + 1);
+                return;
+            }
+            
+            const duration = (distance / 100) * 800; 
+
+            this.tweens.add({
+                targets: this.puppy,
+                x: targetPoint.x,
+                y: targetPoint.y,
+                duration: duration,
+                ease: 'Linear', 
+                onComplete: () => {
+                    moveStep(index + 1);
+                }
             });
-            return true;
-        }
-        return false;
+        };
+
+        this.puppy.play('walk');
+        moveStep(1); 
     }
+
+    private handleMoveCompletion(targetNodeId: number, targetNode: GraphNode): void {
+        this.puppy.play('idle');
+        this.currentNodeId = targetNodeId;
+        this.registry.set('node', this.currentNodeId);
+        this.registry.set('nodeType', targetNode.type);
+
+        if (targetNode.nodeEffects && targetNode.nodeEffects.length > 0) {
+            this.currentResources = applyEffects(this.currentResources, targetNode.nodeEffects, this.level.maxResources);
+            this.registry.set('resources', this.currentResources);
+        }
+
+        if (this.isFogOfWar) {
+            this.revealEdgesFrom(targetNodeId, true);
+        }
+
+        this.isMoving = false; 
+
+        if (this.currentNodeId === this.level.goalNodeId) {
+            this.registry.set('goalReached', true);
+            this.highlightPossibleMoves();
+        } else {
+            this.highlightPossibleMoves();
+        }
+        }
+    
 
     private drawGraph(): void {
         for (const node of this.graph) {
@@ -229,17 +304,16 @@ export class MainScene extends Phaser.Scene {
                 graphics.beginPath();
                 graphics.moveTo(startX, startY);
                 graphics.lineTo(endX, endY);
-                graphics.strokePath();
 
-                const arrowX = startX + (endX - startX) * 0.65;
-                const arrowY = startY + (endY - startY) * 0.65;
-                graphics.fillStyle(0x87a1ff, 0.9);
-                const arrowSize = 10;
-                graphics.fillTriangle(
-                    arrowX + Math.cos(angle) * arrowSize, arrowY + Math.sin(angle) * arrowSize,
-                    arrowX + Math.cos(angle + Math.PI * 0.8) * arrowSize, arrowY + Math.sin(angle + Math.PI * 0.8) * arrowSize,
-                    arrowX + Math.cos(angle - Math.PI * 0.8) * arrowSize, arrowY + Math.sin(angle - Math.PI * 0.8) * arrowSize
-                );
+                // const arrowX = startX + (endX - startX) * 0.65;
+                // const arrowY = startY + (endY - startY) * 0.65;
+                // graphics.fillStyle(0x87a1ff, 0.9);
+                // const arrowSize = 10;
+                // graphics.fillTriangle(
+                //     arrowX + Math.cos(angle) * arrowSize, arrowY + Math.sin(angle) * arrowSize,
+                //     arrowX + Math.cos(angle + Math.PI * 0.8) * arrowSize, arrowY + Math.sin(angle + Math.PI * 0.8) * arrowSize,
+                //     arrowX + Math.cos(angle - Math.PI * 0.8) * arrowSize, arrowY + Math.sin(angle - Math.PI * 0.8) * arrowSize
+                // );
 
                 const edgeKey = `${node.id}-${edge.targetId}`;
                 this.edgeGraphicsMap.set(edgeKey, graphics);
@@ -255,13 +329,10 @@ export class MainScene extends Phaser.Scene {
         }
 
         for (const node of this.graph) {
-            let fill = 0x5e70b5;
-            if (node.type === NodeType.START) fill = 0x53d98a;
-            if (node.type === NodeType.GOAL) fill = 0xff4d4d;
-            if (node.type === NodeType.DEFENDER) fill = 0x9b59b6;
-
-            const nodeCircle = this.add.circle(node.x, node.y, 24, fill);
-            nodeCircle.setStrokeStyle(2, 0xffffff, 0.5);
+       
+            const nodeCircle = this.add.circle(node.x, node.y, 24, 0x000000, 0); 
+            
+            // nodeCircle.setStrokeStyle(2, 0xffffff, 0.5); // 这行记得注释掉或删掉
             nodeCircle.setInteractive({ useHandCursor: true });
             
             this.nodeGraphicsMap.set(node.id, nodeCircle);
@@ -296,14 +367,7 @@ export class MainScene extends Phaser.Scene {
 
         this.nodeGraphicsMap.forEach((circle, id) => {
             if (this.isFogOfWar && !this.revealedNodes.has(id)) return;
-
-            const nodeData = this.graph.find(n => n.id === id)!;
-            let defaultColor = 0x5e70b5;
-            if (nodeData.type === NodeType.START) defaultColor = 0x53d98a;
-            if (nodeData.type === NodeType.GOAL) defaultColor = 0xff4d4d;
-            if (nodeData.type === NodeType.DEFENDER) defaultColor = 0x9b59b6;
-            circle.setFillStyle(defaultColor);
-            circle.setStrokeStyle(0);
+                return;
         });
 
         if (this.registry.get('goalReached')) return;
@@ -313,13 +377,7 @@ export class MainScene extends Phaser.Scene {
             if (circle) {
                 const nextResources = applyEffects(this.currentResources, edge.effects, this.level.maxResources);
                 const isAffordable = nextResources.time >= 0 && nextResources.stamina >= 0;
-                if (isAffordable) {
-                    circle.setFillStyle(0xffffff);
-                    circle.setStrokeStyle(4, 0xf8c146);
-                } else {
-                    circle.setFillStyle(0xffcccc);
-                    circle.setStrokeStyle(4, 0xff0000);
-                }
+                
             }
         });
     }

@@ -16,9 +16,15 @@ export type ResourceEffect = {
 
 export type ResourceVector = Record<ResourceKey, number>;
 
+export type PathPoint = {
+    x: number;
+    y: number;
+};
+
 export type EdgeData = {
     targetId: number;
     effects?: ResourceEffect[];
+    pathNodes?: PathPoint[];
 };
 
 export type GraphNode = {
