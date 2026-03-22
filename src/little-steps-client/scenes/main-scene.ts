@@ -10,6 +10,7 @@ export class MainScene extends Phaser.Scene {
     private puppy!: Phaser.GameObjects.Sprite;
     private currentNodeId!: number;
     private isMoving = false;
+    private isGameOver = false;
 
     private isFogOfWar = false;
     private revealedNodes: Set<number> = new Set();
@@ -21,8 +22,6 @@ export class MainScene extends Phaser.Scene {
     private nodeEffectTextsMap: Map<number, Phaser.GameObjects.Text> = new Map();
 
     private currentResources!: ResourceVector;
-
-    // Energy game: computed once per level at startup
     private energyGameResult!: EnergyGameResult;
 
     constructor() {
@@ -35,10 +34,10 @@ export class MainScene extends Phaser.Scene {
         this.graph = this.level.nodes;
         this.currentNodeId = this.level.startNodeId;
         this.isMoving = false;
+        this.isGameOver = false;
 
         this.isFogOfWar = this.level.id === 'gradual-reveal';
 
-        // Compute energy game result once — this tells us the optimal min budget
         this.energyGameResult = computeEnergyGame(this.level);
         console.log('[EnergyGame] minBudget:', this.energyGameResult.minBudget);
 
@@ -52,7 +51,7 @@ export class MainScene extends Phaser.Scene {
 
     preload(): void {
         this.load.spritesheet('puppy_run', 'assets/Splayer_strip4.png', {
-            frameWidth: 64, // Note: if the sprite looks split or ghosted, try changing this back to 32
+            frameWidth: 64,
             frameHeight: 64
         });
         this.load.image('town_tiles', 'assets/tilemap_packed.png');
@@ -67,15 +66,9 @@ export class MainScene extends Phaser.Scene {
             const bgLayer = map.createLayer('background', tileset, 0, 0);
             const mgLayer = map.createLayer('midground', tileset, 0, 0);
             const fgLayer = map.createLayer('foreground', tileset, 0, 0);
-            if (bgLayer) {
-                bgLayer.setScale(2.5);
-            }
-            if (mgLayer) {
-                mgLayer.setScale(2.5);
-            }
-            if (fgLayer) {
-                fgLayer.setScale(2.5);
-            }
+            if (bgLayer) bgLayer.setScale(2.5);
+            if (mgLayer) mgLayer.setScale(2.5);
+            if (fgLayer) fgLayer.setScale(2.5);
         }
 
         this.currentResources = { ...this.level.initialResources };
@@ -181,9 +174,8 @@ export class MainScene extends Phaser.Scene {
         }).join('\n');
     }
 
-
     private moveToNextNode(targetNodeId: number): void {
-        if (this.isMoving) return;
+        if (this.isMoving || this.isGameOver) return;
 
         const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
         const edge = currentNode.neighbors.find(e => e.targetId === targetNodeId);
@@ -195,14 +187,17 @@ export class MainScene extends Phaser.Scene {
 
         const nextResources = applyEffects(this.currentResources, edge.effects, this.level.maxResources);
 
-        if (nextResources.time < 0 || nextResources.stamina < 0) {
-            console.log("Not enough resources to move!");
-            this.cameras.main.shake(150, 0.005);
+        if (nextResources.time < 0) {
+            this.triggerDefeat('time');
+            return;
+        }
+
+        if (nextResources.stamina < 0) {
+            this.triggerDefeat('stamina');
             return;
         }
 
         if (targetNodeId === this.level.goalNodeId && nextResources.bones < 1) {
-            console.log("You must collect a bone to go home!");
             this.cameras.main.shake(200, 0.01);
             return;
         }
@@ -296,18 +291,114 @@ export class MainScene extends Phaser.Scene {
         this.isMoving = false;
 
         if (this.currentNodeId === this.level.goalNodeId) {
-            // Write finalResources BEFORE goalReached — the registry 'goalReached'
-            // event fires synchronously and triggers showWinPopup(), which reads
-            // finalResources immediately. If the order is reversed, finalResources
-            // is undefined when the popup builds and timeUsed shows 100.
             this.registry.set('finalResources', { ...this.currentResources });
             this.registry.set('goalReached', true);
             this.highlightPossibleMoves();
+            this.triggerVictory();
         } else {
             this.highlightPossibleMoves();
         }
     }
 
+    private triggerVictory(): void {
+        this.isGameOver = true;
+        
+        this.tweens.add({
+            targets: this.puppy,
+            y: this.puppy.y - 30,
+            yoyo: true,
+            repeat: -1,
+            duration: 300,
+            ease: 'Sine.easeInOut'
+        });
+
+        this.time.delayedCall(800, () => {
+            this.showPopup('Level Complete!', 'The puppy reached home safely! 🎉', 'Back to Menu', () => {
+                this.scene.stop('HudScene');
+                this.scene.start('MenuScene');
+            }, true);
+        });
+    }
+
+    private triggerDefeat(reason: 'time' | 'stamina'): void {
+        this.isGameOver = true;
+        this.puppy.stop(); // Stop walk/idle animations to show defeat effect
+        this.cameras.main.shake(200, 0.01);
+
+        let message = '';
+
+        if (reason === 'time') {
+            message = 'Out of time! The puppy fell asleep.';
+            
+            this.tweens.add({
+                targets: this.puppy,
+                angle: 90,
+                duration: 500,
+                ease: 'Bounce.easeOut'
+            });
+
+            const zzz = this.add.text(this.puppy.x + 20, this.puppy.y - 30, 'Zzz...', {
+                fontSize: '24px', color: '#ffffff', fontStyle: 'bold'
+            }).setDepth(20);
+
+            this.tweens.add({
+                targets: zzz, y: zzz.y - 40, alpha: 0, duration: 1500, repeat: -1
+            });
+
+        } else if (reason === 'stamina') {
+            message = 'Out of stamina! The puppy is too tired.';
+            this.puppy.setTint(0x88aaff);
+            
+            this.tweens.add({
+                targets: this.puppy,
+                scaleX: 1.6, scaleY: 1.3,
+                yoyo: true, repeat: 3, duration: 250
+            });
+
+            const sweat = this.add.text(this.puppy.x + 10, this.puppy.y - 30, '💧', {
+                fontSize: '20px'
+            }).setDepth(20);
+
+            this.tweens.add({
+                targets: sweat, y: sweat.y + 20, alpha: 0, duration: 1000, repeat: -1
+            });
+        }
+
+        this.time.delayedCall(1500, () => {
+            this.showPopup('Defeat', message, 'Try Again', () => {
+                this.scene.stop('HudScene');
+                this.scene.restart();
+            }, false);
+        });
+    }
+
+    private showPopup(title: string, message: string, btnText: string, onClick: () => void, isWin: boolean): void {
+        const { width, height } = this.scale;
+
+        const overlay = this.add.rectangle(0, 0, width, height, 0x000000, 0.7).setOrigin(0).setDepth(100);
+
+        const popupBg = this.add.rectangle(width / 2, height / 2, 400, 250, isWin ? 0x27ae60 : 0xc0392b)
+            .setOrigin(0.5).setDepth(101).setStrokeStyle(4, 0xffffff);
+
+        this.add.text(width / 2, height / 2 - 70, title, {
+            fontSize: '32px', color: '#ffffff', fontStyle: 'bold'
+        }).setOrigin(0.5).setDepth(102);
+
+        this.add.text(width / 2, height / 2 - 10, message, {
+            fontSize: '18px', color: '#f6f8ff', align: 'center', wordWrap: { width: 360 }
+        }).setOrigin(0.5).setDepth(102);
+
+        const btnBg = this.add.rectangle(width / 2, height / 2 + 70, 200, 50, 0xffffff)
+            .setOrigin(0.5).setDepth(102).setInteractive({ useHandCursor: true });
+
+        this.add.text(width / 2, height / 2 + 70, btnText, {
+            fontSize: '20px', color: isWin ? '#27ae60' : '#c0392b', fontStyle: 'bold'
+        }).setOrigin(0.5).setDepth(103);
+
+        btnBg.on('pointerover', () => btnBg.setFillStyle(0xe0e0e0));
+        btnBg.on('pointerout', () => btnBg.setFillStyle(0xffffff));
+        btnBg.on('pointerdown', onClick);
+    }
 
     private drawGraph(): void {
         for (const node of this.graph) {
@@ -327,16 +418,6 @@ export class MainScene extends Phaser.Scene {
                 graphics.moveTo(startX, startY);
                 graphics.lineTo(endX, endY);
 
-                // const arrowX = startX + (endX - startX) * 0.65;
-                // const arrowY = startY + (endY - startY) * 0.65;
-                // graphics.fillStyle(0x87a1ff, 0.9);
-                // const arrowSize = 10;
-                // graphics.fillTriangle(
-                //     arrowX + Math.cos(angle) * arrowSize, arrowY + Math.sin(angle) * arrowSize,
-                //     arrowX + Math.cos(angle + Math.PI * 0.8) * arrowSize, arrowY + Math.sin(angle + Math.PI * 0.8) * arrowSize,
-                //     arrowX + Math.cos(angle - Math.PI * 0.8) * arrowSize, arrowY + Math.sin(angle - Math.PI * 0.8) * arrowSize
-                // );
-
                 const edgeKey = `${node.id}-${edge.targetId}`;
                 this.edgeGraphicsMap.set(edgeKey, graphics);
 
@@ -351,17 +432,13 @@ export class MainScene extends Phaser.Scene {
         }
 
         for (const node of this.graph) {
-
             const nodeCircle = this.add.circle(node.x, node.y, 24, 0x000000, 0);
-
-            // nodeCircle.setStrokeStyle(2, 0xffffff, 0.5);
             nodeCircle.setInteractive({ useHandCursor: true });
-
             this.nodeGraphicsMap.set(node.id, nodeCircle);
 
             nodeCircle.on('pointerover', () => {
                 if (this.isFogOfWar && !this.revealedNodes.has(node.id)) return;
-                if (this.registry.get('goalReached') || this.isMoving) return;
+                if (this.registry.get('goalReached') || this.isMoving || this.isGameOver) return;
 
                 const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
                 const edge = currentNode.neighbors.find(e => e.targetId === node.id);
@@ -382,7 +459,6 @@ export class MainScene extends Phaser.Scene {
             const nodeText = this.add.text(node.x, node.y, String(node.id), { color: '#ffffff', fontSize: '16px', fontStyle: 'bold' }).setOrigin(0.5);
             this.nodeTextsMap.set(node.id, nodeText);
 
-            // Show nodeEffects label below the node circle (same style as edge labels)
             if (node.nodeEffects && node.nodeEffects.length > 0) {
                 const effectStr = this.formatEffects(node.nodeEffects);
                 if (effectStr !== '') {
@@ -401,18 +477,15 @@ export class MainScene extends Phaser.Scene {
 
         const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
 
-        // ── Defender turn: auto-move after a short delay ──────────────────────
         if (currentNode.type === NodeType.DEFENDER) {
             this.time.delayedCall(600, () => {
-                if (this.isMoving) return;
+                if (this.isMoving || this.isGameOver) return;
                 const targetId = this.pickDefenderMove(currentNode);
                 if (targetId !== null) this.moveToNextNode(targetId);
             });
             return;
         }
 
-        // ── Player turn: highlight affordable neighbours ──────────────────────
-        // Reset all node visuals first
         this.nodeGraphicsMap.forEach((circle, id) => {
             if (this.isFogOfWar && !this.revealedNodes.has(id)) return;
             circle.setStrokeStyle(0);
@@ -432,34 +505,22 @@ export class MainScene extends Phaser.Scene {
         });
     }
 
-    /**
-     * Pick the defender's move: choose the edge that maximises the puppy's
-     * required budget (worst-case for the puppy), using energy game results.
-     * Falls back to the most expensive edge by time cost if no EG data.
-     */
     private pickDefenderMove(defenderNode: GraphNode): number | null {
         if (defenderNode.neighbors.length === 0) return null;
 
         const budgets = this.energyGameResult?.nodeWinBudgets;
 
         if (budgets) {
-            // Pick the neighbour with the highest winning budget time requirement —
-            // that is the edge that is hardest for the puppy to survive.
-            // nodeWinBudgets is keyed by nodeId and reflects the layer-1 (has-bone)
-            // budget once the puppy has left the defender node, which is the
-            // correct measure of "how much does the puppy need from here onward".
             let worstTarget = defenderNode.neighbors[0].targetId;
             let worstTime = -Infinity;
             for (const edge of defenderNode.neighbors) {
                 const b = budgets.get(edge.targetId);
-                // INF (1e9) means unreachable — treat as maximally bad for puppy
                 const t = b ? b.time : 0;
                 if (t > worstTime) { worstTime = t; worstTarget = edge.targetId; }
             }
             return worstTarget;
         }
 
-        // Fallback: pick the edge with the greatest time cost
         let worst = defenderNode.neighbors[0];
         for (const edge of defenderNode.neighbors) {
             const cost = (edge.effects ?? [])
@@ -468,7 +529,7 @@ export class MainScene extends Phaser.Scene {
             const worstCost = (worst.effects ?? [])
                 .filter(e => e.resource === 'time' && e.op === 'add')
                 .reduce((s, e) => s + e.value, 0);
-            if (cost < worstCost) worst = edge; // most negative = most expensive
+            if (cost < worstCost) worst = edge;
         }
         return worst.targetId;
     }

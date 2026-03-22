@@ -8,7 +8,6 @@ export class HudScene extends Phaser.Scene {
     private previewText!: Phaser.GameObjects.Text;
     private hintText!: Phaser.GameObjects.Text;
 
-    // Win popup objects (created lazily on first win)
     private winPopup?: Phaser.GameObjects.Container;
     private winPopupShown = false;
 
@@ -17,7 +16,6 @@ export class HudScene extends Phaser.Scene {
     }
 
     create(): void {
-        // Semi-transparent background panel behind HUD text
         const hudBg = this.add.rectangle(0, 0, 520, 140, 0x0a0f1e, 0.62)
             .setOrigin(0, 0);
 
@@ -64,7 +62,10 @@ export class HudScene extends Phaser.Scene {
         });
 
         this.winPopupShown = false;
+        
         this.registry.events.on('changedata', this.refreshStatus, this);
+        this.events.once('shutdown', this.shutdown, this);
+        
         this.refreshStatus();
     }
 
@@ -115,7 +116,6 @@ export class HudScene extends Phaser.Scene {
         const final = this.registry.get('finalResources') as ResourceVector | undefined;
         const egResult = this.registry.get('energyGameResult') as EnergyGameResult | undefined;
 
-        // Build feedback (falls back to a simple message if data is missing)
         let feedbackLine = '🐾 Level complete!';
         let ratingColor = '#53d98a';
 
@@ -133,19 +133,13 @@ export class HudScene extends Phaser.Scene {
         const w = 420;
         const h = 240;
 
-        // Dim background panel
         const bg = this.add.rectangle(0, 0, w, h, 0x121a2f, 0.92)
             .setStrokeStyle(2, 0x87a1ff, 1);
 
-        // Title
         const title = this.add.text(0, -80, '🏠  Made it home!', {
             fontSize: '28px', fontStyle: 'bold', color: '#f6f8ff'
         }).setOrigin(0.5);
 
-        // Resources used line
-        // Show "time remaining" for both player and optimal — same unit, same direction.
-        // Optimal remaining = initial - minBudget (what a perfect run leaves over).
-        // Player remaining  = final.time (what the player actually has left).
         const playerLeft = final?.time ?? 0;
         const optTime = egResult?.minBudget?.time;
         const optLeft = (initial && optTime !== undefined) ? initial.time - optTime : undefined;
@@ -154,12 +148,10 @@ export class HudScene extends Phaser.Scene {
             { fontSize: '17px', color: '#c8d3ff' }
         ).setOrigin(0.5);
 
-        // Feedback
         const feedback = this.add.text(0, 10, feedbackLine, {
             fontSize: '17px', color: ratingColor, wordWrap: { width: w - 40 }
         }).setOrigin(0.5);
 
-        // Menu button
         const btnBg = this.add.rectangle(0, 75, 160, 40, 0x34495e)
             .setInteractive({ useHandCursor: true });
         const btnTxt = this.add.text(0, 75, '🏠  Menu', {
@@ -175,12 +167,11 @@ export class HudScene extends Phaser.Scene {
         this.winPopup = this.add.container(cx, cy, [bg, title, resourceLine, feedback, btnBg, btnTxt]);
         this.winPopup.setDepth(100);
 
-        // Animate in
         this.winPopup.setAlpha(0);
         this.tweens.add({ targets: this.winPopup, alpha: 1, duration: 400, ease: 'Power2' });
     }
 
-    shutdown(): void {
+    private shutdown(): void {
         this.registry.events.off('changedata', this.refreshStatus, this);
     }
 }
