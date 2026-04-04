@@ -23,7 +23,7 @@ export class MainScene extends Phaser.Scene {
 
     private currentResources!: ResourceVector;
     private energyGameResult!: EnergyGameResult;
-
+    private activeHints: Phaser.GameObjects.GameObject[] = [];
     constructor() {
         super('MainScene');
     }
@@ -71,6 +71,10 @@ export class MainScene extends Phaser.Scene {
             if (fgLayer) fgLayer.setScale(2.5);
         }
 
+        const dotGraphics = this.make.graphics({ x: 0, y: 0 }).fillStyle(0xffffff, 1).fillCircle(4, 4, 4);
+        dotGraphics.generateTexture('white_dot', 8, 8);
+        dotGraphics.destroy();
+
         this.currentResources = { ...this.level.initialResources };
         this.registry.set('resources', this.currentResources);
         this.registry.set('preview', null);
@@ -101,6 +105,7 @@ export class MainScene extends Phaser.Scene {
         this.puppy = this.add.sprite(start.x, start.y, 'puppy_run');
         this.puppy.setScale(1.5);
         this.puppy.setDepth(10);
+        this.puppy.setOrigin(0.5, 0.9);
 
         this.anims.create({
             key: 'walk',
@@ -117,6 +122,35 @@ export class MainScene extends Phaser.Scene {
 
         this.registry.set('nodeType', start.type);
         this.highlightPossibleMoves();
+    }
+
+private createMagicDustEmitter(x: number, y: number, color: number): Phaser.GameObjects.GameObject {
+        const emitter = this.add.particles(x, y , 'white_dot', {
+            // 1. 速度和重力
+            speed: { min: 10, max: 25 }, 
+            gravityY: -5, // 给一点点向上的微弱浮力，更有灵动感
+            
+            // 2. 发射区域
+            emitZone: { 
+                type: 'random', 
+                source: new Phaser.Geom.Circle(0, 0, 12) 
+            },
+
+            // 3. 视觉增强
+            scale: { start: 0, end: 0.8, ease: 'Back.easeOut' }, 
+            alpha: { start: 0, end: 1, ease: 'Power1.easeIn' }, 
+            lifespan: { min: 1000, max: 2500 }, 
+            
+            // 👇 【核心修改】让点点出来的飞快！
+            frequency: 40,   // 之前是 80ms，现在 20ms 发射一次（快了 4 倍！）
+            quantity: 1,     // 之前一次发 1 个，现在一次喷 2 个（总量又翻了一倍！）
+            
+            tint: color,
+            blendMode: 'ADD' 
+        });
+
+        emitter.setDepth(100); 
+        return emitter;
     }
 
     private revealNode(nodeId: number, animate: boolean): void {
@@ -174,7 +208,8 @@ export class MainScene extends Phaser.Scene {
         }).join('\n');
     }
 
-    private moveToNextNode(targetNodeId: number): void {
+
+ private moveToNextNode(targetNodeId: number): void {
         if (this.isMoving || this.isGameOver) return;
 
         const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
@@ -201,6 +236,8 @@ export class MainScene extends Phaser.Scene {
             this.cameras.main.shake(200, 0.01);
             return;
         }
+
+        this.clearHints();
 
         this.isMoving = true;
         this.currentResources = nextResources;
@@ -230,6 +267,15 @@ export class MainScene extends Phaser.Scene {
                 }
             });
         }
+    }
+
+    private clearHints(): void {
+        this.activeHints.forEach(hint => {
+            if (hint) {
+                hint.destroy(); // 彻底销毁发射器
+            }
+        });
+        this.activeHints = []; // 清空数组
     }
 
     private moveAlongPath(path: { x: number, y: number }[], targetNode: GraphNode): void {
@@ -456,8 +502,8 @@ export class MainScene extends Phaser.Scene {
                 this.moveToNextNode(node.id);
             });
 
-            const nodeText = this.add.text(node.x, node.y, String(node.id), { color: '#ffffff', fontSize: '16px', fontStyle: 'bold' }).setOrigin(0.5);
-            this.nodeTextsMap.set(node.id, nodeText);
+            // const nodeText = this.add.text(node.x, node.y, String(node.id), { color: '#ffffff', fontSize: '16px', fontStyle: 'bold' }).setOrigin(0.5);
+            // this.nodeTextsMap.set(node.id, nodeText);
 
             if (node.nodeEffects && node.nodeEffects.length > 0) {
                 const effectStr = this.formatEffects(node.nodeEffects);
@@ -498,7 +544,14 @@ export class MainScene extends Phaser.Scene {
             const nextResources = applyEffects(this.currentResources, edge.effects, this.level.maxResources);
             const isAffordable = nextResources.time >= 0 && nextResources.stamina >= 0;
             if (isAffordable) {
-                circle.setStrokeStyle(3, 0xffdd57, 1);
+                circle.setStrokeStyle(0); // 去掉生硬的边框
+
+                // 👇 【修改 4】召唤一小团发光的蓝色(0x88ccff)魔法粉末！你也可以换成黄色(0xffdd57)
+                const dust = this.createMagicDustEmitter(circle.x, circle.y, 0x88ccff);
+                
+                // 把发射器加进数组里，方便清理
+                this.activeHints.push(dust);
+                
             } else {
                 circle.setStrokeStyle(3, 0xff4444, 0.7);
             }
