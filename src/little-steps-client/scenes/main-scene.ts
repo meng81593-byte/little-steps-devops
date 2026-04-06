@@ -125,19 +125,17 @@ export class MainScene extends Phaser.Scene {
             frameRate: 10
         });
 
-        // 1. 原地发呆动作
         this.anims.create({
             key: 'squirrel_idle',
             frames: this.anims.generateFrameNumbers('squirrel_img', { frames: [0, 1] }),
-            frameRate: 4, // 👈 降到 4，慢慢悠悠地发呆
+            frameRate: 4,
             repeat: -1
         });
 
-        // 2. 逃跑跑路动作
         this.anims.create({
             key: 'squirrel_run',
             frames: this.anims.generateFrameNumbers('squirrel_img', { frames: [0, 1] }), 
-            frameRate: 8, // 👈 降到 8，正常的跑步节奏，不闪瞎眼
+            frameRate: 8, 
             repeat: -1
         });
 
@@ -151,7 +149,7 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
         const emitter = this.add.particles(x, y , 'white_dot', {
             // 1. 速度和重力
             speed: { min: 10, max: 25 }, 
-            gravityY: -5, // 给一点点向上的微弱浮力，更有灵动感
+            gravityY: -5, 
             
             // 2. 发射区域
             emitZone: { 
@@ -164,7 +162,6 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
             alpha: { start: 0, end: 1, ease: 'Power1.easeIn' }, 
             lifespan: { min: 1000, max: 2500 }, 
             
-            // 👇 【核心修改】让点点出来的飞快！
             frequency: 40,   // 之前是 80ms，现在 20ms 发射一次（快了 4 倍！）
             quantity: 1,     // 之前一次发 1 个，现在一次喷 2 个（总量又翻了一倍！）
             
@@ -511,7 +508,7 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
             duration: 400,
             ease: 'Back.easeOut',
             onComplete: () => {
-                // 👇 4. 关键：等待玩家点击屏幕任意位置
+                // 等待玩家点击屏幕任意位置
                 blocker.once('pointerdown', () => {
                     blocker.destroy(); // 玩家点完后，销毁拦截层
                     
@@ -612,7 +609,7 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
             // 取消了 y - 10 的偏移，并且使用 setOrigin(0.5, 0.9) 和小狗完全一致！
             const squirrel = this.add.sprite(currentNode.x + 20, currentNode.y, 'squirrel_img')
                 .play('squirrel_idle') 
-                .setOrigin(0.5, 0.9) // 👈 关键：脚丫子贴地透视！
+                .setOrigin(0.5, 0.9) //脚丫子贴地透视！
                 .setDepth(30)
                 .setScale(2)
                 .setFlipX(true);
@@ -629,7 +626,7 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
                 if (targetId !== null) {
                     const targetNode = this.graph.find(n => n.id === targetId)!;
                     
-                    // 👇 【核心修改 2】把松鼠记在“全局变量”里，方便小狗抓它
+                    // 把松鼠记在“全局变量”里，方便小狗抓它
                     this.activeDefender = squirrel;
 
                     const edge = currentNode.neighbors.find(e => e.targetId === targetId)!;
@@ -640,7 +637,7 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
 
                     const moveSquirrelStep = (index: number) => {
                         if (index >= path.length) {
-                            // 👇 【核心修改 3】跑完路后不要 destroy！
+                            // 跑完路后不要 destroy！
                             // 让松鼠停在终点，并播放 idle 动画，假装回头看狗
                             squirrel.play('squirrel_idle'); 
                             return;
