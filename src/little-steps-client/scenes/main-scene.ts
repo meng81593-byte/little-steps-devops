@@ -151,7 +151,6 @@ export class MainScene extends Phaser.Scene {
         this.highlightPossibleMoves();
     }
 
-    // Helper to dynamically generate the bone texture if it hasn't been created yet
     private createBoneTexture() {
         if (this.textures.exists('bone_icon')) return;
         const boneGfx = this.make.graphics({ x: 0, y: 0 });
@@ -230,7 +229,7 @@ export class MainScene extends Phaser.Scene {
         }
     }
 
-    // Advanced UI: Generates dynamic effect bars or bone icons
+    // Core Change: Refined effect bars for a cleaner, smaller UI footprint
     private createEffectBars(x: number, y: number, effects: ResourceEffect[] | undefined): Phaser.GameObjects.Container | null {
         if (!effects || effects.length === 0) return null;
 
@@ -238,63 +237,62 @@ export class MainScene extends Phaser.Scene {
         const graphics = this.add.graphics();
         container.add(graphics);
 
-        const barW = 46;
-        const barH = 14;
-        const spacing = 18;
+        // Scaled down dimensions to reduce visual clutter
+        const barW = 40;
+        const barH = 12;
+        const spacing = 14;
         const totalHeight = effects.length * spacing;
         const startY = -totalHeight / 2 + barH / 2;
 
         effects.forEach((effect, index) => {
             const offsetY = startY + index * spacing - barH / 2;
 
-            // 1. Handle Bones differently (Display Icon instead of a bar)
             if (effect.resource === 'bones') {
-                const boneImg = this.add.image(-12, offsetY + barH / 2, 'bone_icon').setScale(1.2);
-                const text = this.add.text(10, offsetY + barH / 2, `+${effect.value}`, {
-                    fontSize: '14px', fontStyle: 'bold', color: '#ffffff', stroke: '#000000', strokeThickness: 3
+                const boneImg = this.add.image(-10, offsetY + barH / 2, 'bone_icon').setScale(1.1);
+                const text = this.add.text(12, offsetY + barH / 2, `+${effect.value}`, {
+                    fontSize: '12px', fontStyle: 'bold', color: '#ffffff', stroke: '#000000', strokeThickness: 3
                 }).setOrigin(0.5);
                 container.add([boneImg, text]);
-                return; // Skip drawing the bar logic for bones
+                return;
             }
 
-            // 2. Handle Time and Stamina bars
-            const isCost = effect.value < 0; // Negative values are costs
+            const isCost = effect.value < 0;
 
             let mainColor = 0xffffff;
             let resChar = 'B';
 
             if (effect.resource === 'time') {
-                mainColor = isCost ? 0xe74c3c : 0xf1c40f; // Red for cost, Yellow for gain
+                mainColor = isCost ? 0xe74c3c : 0xf1c40f;
                 resChar = 'T';
             } else if (effect.resource === 'stamina') {
-                mainColor = isCost ? 0xe74c3c : 0x2ecc71; // Red for cost, Green for gain
+                mainColor = isCost ? 0xe74c3c : 0x2ecc71;
                 resChar = 'S';
             }
 
             const valStr = effect.value > 0 ? `+${effect.value} ${resChar}` : `${effect.value} ${resChar}`;
-            const fillW = Math.min(Math.abs(effect.value) * 1.5, barW);
 
-            // Background (Dark)
+            // Adjusted multiplier so high values don't overflow the smaller bars
+            const fillW = Math.min(Math.abs(effect.value) * 1.0, barW);
+
+            // Background
             graphics.fillStyle(0x1a252f, 0.9);
-            graphics.fillRoundedRect(-barW / 2, offsetY, barW, barH, 3);
+            graphics.fillRoundedRect(-barW / 2, offsetY, barW, barH, 2);
 
             // Fill Bar
             graphics.fillStyle(mainColor, 1);
             if (isCost) {
-                // If it's a cost, draw the red bar starting from the RIGHT edge inwards
-                graphics.fillRoundedRect(barW / 2 - fillW, offsetY, fillW, barH, 3);
+                graphics.fillRoundedRect(barW / 2 - fillW, offsetY, fillW, barH, 2);
             } else {
-                // If it's a gain, draw the normal bar starting from the LEFT edge outwards
-                graphics.fillRoundedRect(-barW / 2, offsetY, fillW, barH, 3);
+                graphics.fillRoundedRect(-barW / 2, offsetY, fillW, barH, 2);
             }
 
             // Outer Border
             graphics.lineStyle(1, 0x000000, 0.8);
-            graphics.strokeRoundedRect(-barW / 2, offsetY, barW, barH, 3);
+            graphics.strokeRoundedRect(-barW / 2, offsetY, barW, barH, 2);
 
-            // Text Outline
-            const text = this.add.text(0, offsetY + barH / 2, valStr, {
-                fontSize: '11px',
+            // Text Outline (Smaller Font)
+            const text = this.add.text(0, offsetY + barH / 2 + 0.5, valStr, {
+                fontSize: '10px',
                 fontStyle: 'bold',
                 color: '#ffffff',
                 stroke: '#000000',
@@ -315,7 +313,6 @@ export class MainScene extends Phaser.Scene {
         const edge = currentNode.neighbors.find(e => e.targetId === targetNodeId);
 
         if (!edge) {
-            console.log("Too far! Puppy can't be there!");
             return;
         }
 
@@ -428,21 +425,16 @@ export class MainScene extends Phaser.Scene {
             this.currentResources = applyEffects(this.currentResources, targetNode.nodeEffects, this.level.maxResources);
             this.registry.set('resources', this.currentResources);
 
-            // New Animation: Trigger the flying bone animation if a bone was collected
             const boneEffect = targetNode.nodeEffects.find(e => e.resource === 'bones' && e.value > 0);
             if (boneEffect && !this.registry.get(`bone_collected_${targetNodeId}`)) {
                 this.registry.set(`bone_collected_${targetNodeId}`, true);
 
-                // Fade out the bone icon UI on the map since we collected it
                 const effectUI = this.nodeEffectTextsMap.get(targetNodeId);
                 if (effectUI) {
                     this.tweens.add({ targets: effectUI, alpha: 0, duration: 300 });
                 }
 
-                // Create a temporary bone sprite to animate flying to the HUD
                 const flyingBone = this.add.image(this.puppy.x, this.puppy.y - 30, 'bone_icon').setScale(1.5).setDepth(200);
-
-                // Target coordinates in the HUD Scene (Top Right Area)
                 const targetX = this.cameras.main.scrollX + 430;
                 const targetY = this.cameras.main.scrollY + 60;
 
@@ -450,12 +442,12 @@ export class MainScene extends Phaser.Scene {
                     targets: flyingBone,
                     x: targetX,
                     y: targetY,
-                    scale: 2.5, // Scale up during flight for visual emphasis
-                    rotation: Math.PI * 4, // Spin it!
+                    scale: 2.5,
+                    rotation: Math.PI * 4,
                     duration: 600,
                     ease: 'Power2',
                     onComplete: () => {
-                        flyingBone.destroy(); // Destroy sprite after reaching HUD
+                        flyingBone.destroy();
                     }
                 });
             }
@@ -652,6 +644,8 @@ export class MainScene extends Phaser.Scene {
     }
 
     private drawGraph(): void {
+        const renderedEdgeUIs = new Set<string>();
+
         for (const node of this.graph) {
             for (const edge of node.neighbors) {
                 const neighbor = this.graph.find(n => n.id === edge.targetId)!;
@@ -672,14 +666,27 @@ export class MainScene extends Phaser.Scene {
                 const edgeKey = `${node.id}-${edge.targetId}`;
                 this.edgeGraphicsMap.set(edgeKey, graphics);
 
-                const effectContainer = this.createEffectBars(
-                    startX + (endX - startX) * 0.35,
-                    startY + (endY - startY) * 0.35,
-                    edge.effects
-                );
+                // Core Change: Generate an undirected key to merge bidirectional UI bars
+                const minId = Math.min(node.id, edge.targetId);
+                const maxId = Math.max(node.id, edge.targetId);
+                const undirectedKey = `${minId}-${maxId}`;
 
-                if (effectContainer) {
-                    this.edgeTextsMap.set(edgeKey, effectContainer);
+                if (!renderedEdgeUIs.has(undirectedKey)) {
+                    renderedEdgeUIs.add(undirectedKey);
+
+                    // Place the merged UI exactly in the center of the path (0.5 instead of 0.35)
+                    const effectContainer = this.createEffectBars(
+                        startX + (endX - startX) * 0.5,
+                        startY + (endY - startY) * 0.5,
+                        edge.effects
+                    );
+
+                    if (effectContainer) {
+                        this.edgeTextsMap.set(edgeKey, effectContainer);
+                        // Map both directions to the same container so Fog of War logic works perfectly
+                        this.edgeTextsMap.set(`${maxId}-${minId}`, effectContainer);
+                        this.edgeTextsMap.set(`${minId}-${maxId}`, effectContainer);
+                    }
                 }
             }
         }
@@ -709,8 +716,9 @@ export class MainScene extends Phaser.Scene {
                 this.moveToNextNode(node.id);
             });
 
+            // Core Change: Render node effects (like Bones or Stamina gain) ABOVE the node to save horizontal space
             if (node.nodeEffects && node.nodeEffects.length > 0) {
-                const effectContainer = this.createEffectBars(node.x + 38, node.y, node.nodeEffects);
+                const effectContainer = this.createEffectBars(node.x, node.y - 36, node.nodeEffects);
                 if (effectContainer) {
                     this.nodeEffectTextsMap.set(node.id, effectContainer);
                 }
