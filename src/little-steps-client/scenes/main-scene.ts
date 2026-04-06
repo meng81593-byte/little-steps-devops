@@ -18,8 +18,8 @@ export class MainScene extends Phaser.Scene {
     private nodeGraphicsMap: Map<number, Phaser.GameObjects.Arc> = new Map();
     private nodeTextsMap: Map<number, Phaser.GameObjects.Text> = new Map();
     private edgeGraphicsMap: Map<string, Phaser.GameObjects.Graphics> = new Map();
-    private edgeTextsMap: Map<string, Phaser.GameObjects.Text> = new Map();
-    private nodeEffectTextsMap: Map<number, Phaser.GameObjects.Text> = new Map();
+    private edgeTextsMap: Map<string, Phaser.GameObjects.Container> = new Map();
+    private nodeEffectTextsMap: Map<number, Phaser.GameObjects.Container> = new Map();
 
     private currentResources!: ResourceVector;
     private energyGameResult!: EnergyGameResult;
@@ -37,7 +37,7 @@ export class MainScene extends Phaser.Scene {
     init(data: { levelIndex: number }): void {
         const index = data.levelIndex ?? 0;
         this.level = LEVELS[index];
-        this.graph = this.level.nodes; // The visual graph remains the original one
+        this.graph = this.level.nodes;
         this.currentNodeId = this.level.startNodeId;
         this.isMoving = false;
         this.isGameOver = false;
@@ -49,7 +49,7 @@ export class MainScene extends Phaser.Scene {
 
         this.isFogOfWar = this.level.id === 'gradual-reveal';
 
-        // Core change: If this level has a cat, build the expanded graph for the engine
+        // If this level has a cat, build the expanded graph for the engine
         const graphForEngine = this.level.catStartNodeId !== undefined
             ? buildCatChaseGraph(this.level)
             : this.level;
@@ -75,6 +75,9 @@ export class MainScene extends Phaser.Scene {
     }
 
     create(): void {
+        // Ensure the bone texture exists for the map icons and flying animation
+        this.createBoneTexture();
+
         const map = this.make.tilemap({ key: 'map' });
         const tileset = map.addTilesetImage('town_tiles', 'town_tiles');
 
@@ -140,7 +143,6 @@ export class MainScene extends Phaser.Scene {
         if (this.level.catStartNodeId !== undefined) {
             this.catNodeId = this.level.catStartNodeId;
             const catStartNode = this.graph.find(n => n.id === this.catNodeId)!;
-            // Use puppy sprite as placeholder and tint it red
             this.catSprite = this.add.sprite(catStartNode.x, catStartNode.y, 'puppy_run');
             this.catSprite.setScale(1.5).setDepth(11).setOrigin(0.5, 0.9).setTint(0xff5555);
         }
@@ -149,31 +151,36 @@ export class MainScene extends Phaser.Scene {
         this.highlightPossibleMoves();
     }
 
+    // Helper to dynamically generate the bone texture if it hasn't been created yet
+    private createBoneTexture() {
+        if (this.textures.exists('bone_icon')) return;
+        const boneGfx = this.make.graphics({ x: 0, y: 0 });
+        boneGfx.fillStyle(0xffffff, 1);
+        const w = 16, h = 6, r = 4;
+
+        boneGfx.fillRoundedRect(r, r, w, h, h / 2);
+        boneGfx.fillCircle(r, h / 2 + 1, r);
+        boneGfx.fillCircle(r, h / 2 + r + 1, r);
+        boneGfx.fillCircle(w + r, h / 2 + 1, r);
+        boneGfx.fillCircle(w + r, h / 2 + r + 1, r);
+
+        boneGfx.generateTexture('bone_icon', w + r * 2, h + r * 2);
+        boneGfx.destroy();
+    }
+
     private createMagicDustEmitter(x: number, y: number, color: number): Phaser.GameObjects.GameObject {
         const emitter = this.add.particles(x, y, 'white_dot', {
-            // 1. Speed and gravity
             speed: { min: 10, max: 25 },
-            gravityY: -5, // Add a slight upward buoyancy for a more dynamic feel
-
-            // 2. Emission zone
-            emitZone: {
-                type: 'random',
-                source: new Phaser.Geom.Circle(0, 0, 12)
-            },
-
-            // 3. Visual enhancements
+            gravityY: -5,
+            emitZone: { type: 'random', source: new Phaser.Geom.Circle(0, 0, 12) },
             scale: { start: 0, end: 0.8, ease: 'Back.easeOut' },
             alpha: { start: 0, end: 1, ease: 'Power1.easeIn' },
             lifespan: { min: 1000, max: 2500 },
-
-            // Core modification: Make the particles emit very fast!
-            frequency: 40,   // Emits every 20ms
-            quantity: 1,     // Emits 2 at a time
-
+            frequency: 40,
+            quantity: 1,
             tint: color,
             blendMode: 'ADD'
         });
-
         emitter.setDepth(100);
         return emitter;
     }
@@ -223,14 +230,82 @@ export class MainScene extends Phaser.Scene {
         }
     }
 
-    private formatEffects(effects: ResourceEffect[] | undefined): string {
-        if (!effects || effects.length === 0) return '';
-        return effects.map(e => {
-            const res = e.resource === 'time' ? 'T' : e.resource === 'stamina' ? 'S' : 'B';
-            if (e.op === 'set') return `${res}=${e.value}`;
-            if (e.op === 'min') return `${res}≤${e.value}`;
-            return e.value > 0 ? `+${e.value}${res}` : `${e.value}${res}`;
-        }).join('\n');
+    // Advanced UI: Generates dynamic effect bars or bone icons
+    private createEffectBars(x: number, y: number, effects: ResourceEffect[] | undefined): Phaser.GameObjects.Container | null {
+        if (!effects || effects.length === 0) return null;
+
+        const container = this.add.container(x, y);
+        const graphics = this.add.graphics();
+        container.add(graphics);
+
+        const barW = 46;
+        const barH = 14;
+        const spacing = 18;
+        const totalHeight = effects.length * spacing;
+        const startY = -totalHeight / 2 + barH / 2;
+
+        effects.forEach((effect, index) => {
+            const offsetY = startY + index * spacing - barH / 2;
+
+            // 1. Handle Bones differently (Display Icon instead of a bar)
+            if (effect.resource === 'bones') {
+                const boneImg = this.add.image(-12, offsetY + barH / 2, 'bone_icon').setScale(1.2);
+                const text = this.add.text(10, offsetY + barH / 2, `+${effect.value}`, {
+                    fontSize: '14px', fontStyle: 'bold', color: '#ffffff', stroke: '#000000', strokeThickness: 3
+                }).setOrigin(0.5);
+                container.add([boneImg, text]);
+                return; // Skip drawing the bar logic for bones
+            }
+
+            // 2. Handle Time and Stamina bars
+            const isCost = effect.value < 0; // Negative values are costs
+
+            let mainColor = 0xffffff;
+            let resChar = 'B';
+
+            if (effect.resource === 'time') {
+                mainColor = isCost ? 0xe74c3c : 0xf1c40f; // Red for cost, Yellow for gain
+                resChar = 'T';
+            } else if (effect.resource === 'stamina') {
+                mainColor = isCost ? 0xe74c3c : 0x2ecc71; // Red for cost, Green for gain
+                resChar = 'S';
+            }
+
+            const valStr = effect.value > 0 ? `+${effect.value} ${resChar}` : `${effect.value} ${resChar}`;
+            const fillW = Math.min(Math.abs(effect.value) * 1.5, barW);
+
+            // Background (Dark)
+            graphics.fillStyle(0x1a252f, 0.9);
+            graphics.fillRoundedRect(-barW / 2, offsetY, barW, barH, 3);
+
+            // Fill Bar
+            graphics.fillStyle(mainColor, 1);
+            if (isCost) {
+                // If it's a cost, draw the red bar starting from the RIGHT edge inwards
+                graphics.fillRoundedRect(barW / 2 - fillW, offsetY, fillW, barH, 3);
+            } else {
+                // If it's a gain, draw the normal bar starting from the LEFT edge outwards
+                graphics.fillRoundedRect(-barW / 2, offsetY, fillW, barH, 3);
+            }
+
+            // Outer Border
+            graphics.lineStyle(1, 0x000000, 0.8);
+            graphics.strokeRoundedRect(-barW / 2, offsetY, barW, barH, 3);
+
+            // Text Outline
+            const text = this.add.text(0, offsetY + barH / 2, valStr, {
+                fontSize: '11px',
+                fontStyle: 'bold',
+                color: '#ffffff',
+                stroke: '#000000',
+                strokeThickness: 3
+            }).setOrigin(0.5);
+
+            container.add(text);
+        });
+
+        container.setDepth(5);
+        return container;
     }
 
     private moveToNextNode(targetNodeId: number): void {
@@ -296,10 +371,10 @@ export class MainScene extends Phaser.Scene {
     private clearHints(): void {
         this.activeHints.forEach(hint => {
             if (hint) {
-                hint.destroy(); // Completely destroy the emitter
+                hint.destroy();
             }
         });
-        this.activeHints = []; // Clear the array
+        this.activeHints = [];
     }
 
     private moveAlongPath(path: { x: number, y: number }[], targetNode: GraphNode): void {
@@ -352,6 +427,38 @@ export class MainScene extends Phaser.Scene {
         if (targetNode.nodeEffects && targetNode.nodeEffects.length > 0) {
             this.currentResources = applyEffects(this.currentResources, targetNode.nodeEffects, this.level.maxResources);
             this.registry.set('resources', this.currentResources);
+
+            // New Animation: Trigger the flying bone animation if a bone was collected
+            const boneEffect = targetNode.nodeEffects.find(e => e.resource === 'bones' && e.value > 0);
+            if (boneEffect && !this.registry.get(`bone_collected_${targetNodeId}`)) {
+                this.registry.set(`bone_collected_${targetNodeId}`, true);
+
+                // Fade out the bone icon UI on the map since we collected it
+                const effectUI = this.nodeEffectTextsMap.get(targetNodeId);
+                if (effectUI) {
+                    this.tweens.add({ targets: effectUI, alpha: 0, duration: 300 });
+                }
+
+                // Create a temporary bone sprite to animate flying to the HUD
+                const flyingBone = this.add.image(this.puppy.x, this.puppy.y - 30, 'bone_icon').setScale(1.5).setDepth(200);
+
+                // Target coordinates in the HUD Scene (Top Right Area)
+                const targetX = this.cameras.main.scrollX + 430;
+                const targetY = this.cameras.main.scrollY + 60;
+
+                this.tweens.add({
+                    targets: flyingBone,
+                    x: targetX,
+                    y: targetY,
+                    scale: 2.5, // Scale up during flight for visual emphasis
+                    rotation: Math.PI * 4, // Spin it!
+                    duration: 600,
+                    ease: 'Power2',
+                    onComplete: () => {
+                        flyingBone.destroy(); // Destroy sprite after reaching HUD
+                    }
+                });
+            }
         }
 
         if (this.isFogOfWar) {
@@ -366,12 +473,11 @@ export class MainScene extends Phaser.Scene {
             this.highlightPossibleMoves();
             this.triggerVictory();
         } else {
-            // New Logic: Process the cat's turn after the player moves safely
             if (this.catNodeId !== undefined) {
                 if (this.currentNodeId === this.catNodeId) {
-                    this.triggerDefeat('cat'); // Player ran into the cat
+                    this.triggerDefeat('cat');
                 } else {
-                    this.moveCat(); // Trigger the cat's movement
+                    this.moveCat();
                 }
             } else {
                 this.highlightPossibleMoves();
@@ -387,20 +493,16 @@ export class MainScene extends Phaser.Scene {
 
         let bestTarget = catNode.neighbors[0]?.targetId || this.catNodeId;
 
-        // 1. Hunting instinct: If the dog is adjacent, catch it immediately without overthinking
         if (catNode.neighbors.some(e => e.targetId === this.currentNodeId)) {
             bestTarget = this.currentNodeId;
         } else {
             let maxTimeCost = -1;
-            let minPhysicalDistance = Infinity; // Fallback distance if scores are equal
+            let minPhysicalDistance = Infinity;
 
-            // 2. Calculation: Evaluate which move threatens the player the most using the game graph
             for (const edge of catNode.neighbors) {
-                // Assume the cat moves to targetId, transitioning to the player's turn state in the expanded graph
                 const nextPlayerStateId = (this.currentNodeId * 1000) + edge.targetId;
                 const cost = budgets.get(nextPlayerStateId)?.time ?? 0;
 
-                // Get physical distance to break ties
                 const targetNode = this.graph.find(n => n.id === edge.targetId)!;
                 const playerNode = this.graph.find(n => n.id === this.currentNodeId)!;
                 const dist = Phaser.Math.Distance.Between(targetNode.x, targetNode.y, playerNode.x, playerNode.y);
@@ -410,7 +512,6 @@ export class MainScene extends Phaser.Scene {
                     bestTarget = edge.targetId;
                     minPhysicalDistance = dist;
                 }
-                // 3. Common sense fallback: If game graph scores are identical, pick the physically closer node
                 else if (cost === maxTimeCost) {
                     if (dist < minPhysicalDistance) {
                         minPhysicalDistance = dist;
@@ -431,7 +532,7 @@ export class MainScene extends Phaser.Scene {
             targets: this.catSprite,
             x: targetNode.x,
             y: targetNode.y,
-            duration: 800, // Cat's movement duration
+            duration: 800,
             ease: 'Linear',
             onComplete: () => {
                 this.catSprite?.stop();
@@ -439,9 +540,9 @@ export class MainScene extends Phaser.Scene {
                 this.isCatMoving = false;
 
                 if (this.catNodeId === this.currentNodeId) {
-                    this.triggerDefeat('cat'); // The cat caught the dog
+                    this.triggerDefeat('cat');
                 } else {
-                    this.highlightPossibleMoves(); // Cycle back to the player's turn
+                    this.highlightPossibleMoves();
                 }
             }
         });
@@ -449,9 +550,6 @@ export class MainScene extends Phaser.Scene {
 
     private triggerVictory(): void {
         this.isGameOver = true;
-
-        // Keep the jumping animation but remove the direct showPopup call
-        // The detailed win popup is now fully handled by HudScene
         this.tweens.add({
             targets: this.puppy,
             y: this.puppy.y - 30,
@@ -464,7 +562,7 @@ export class MainScene extends Phaser.Scene {
 
     private triggerDefeat(reason: 'time' | 'stamina' | 'cat'): void {
         this.isGameOver = true;
-        this.puppy.stop(); // Stop walk/idle animations to show defeat effect
+        this.puppy.stop();
         this.cameras.main.shake(200, 0.01);
 
         let message = '';
@@ -484,7 +582,6 @@ export class MainScene extends Phaser.Scene {
             }
         } else if (reason === 'time') {
             message = 'Out of time! The puppy fell asleep.';
-
             this.tweens.add({
                 targets: this.puppy,
                 angle: 90,
@@ -529,7 +626,6 @@ export class MainScene extends Phaser.Scene {
 
     private showPopup(title: string, message: string, btnText: string, onClick: () => void, isWin: boolean): void {
         const { width, height } = this.scale;
-
         const overlay = this.add.rectangle(0, 0, width, height, 0x000000, 0.7).setOrigin(0).setDepth(100);
 
         const popupBg = this.add.rectangle(width / 2, height / 2, 400, 250, isWin ? 0x27ae60 : 0xc0392b)
@@ -576,12 +672,14 @@ export class MainScene extends Phaser.Scene {
                 const edgeKey = `${node.id}-${edge.targetId}`;
                 this.edgeGraphicsMap.set(edgeKey, graphics);
 
-                const effectStr = this.formatEffects(edge.effects);
-                if (effectStr !== '') {
-                    const text = this.add.text(startX + (endX - startX) * 0.35, startY + (endY - startY) * 0.35, effectStr, {
-                        color: '#ffaaaa', fontSize: '12px', fontStyle: 'bold', stroke: '#121a2f', strokeThickness: 4
-                    }).setOrigin(0.5);
-                    this.edgeTextsMap.set(edgeKey, text);
+                const effectContainer = this.createEffectBars(
+                    startX + (endX - startX) * 0.35,
+                    startY + (endY - startY) * 0.35,
+                    edge.effects
+                );
+
+                if (effectContainer) {
+                    this.edgeTextsMap.set(edgeKey, effectContainer);
                 }
             }
         }
@@ -612,20 +710,15 @@ export class MainScene extends Phaser.Scene {
             });
 
             if (node.nodeEffects && node.nodeEffects.length > 0) {
-                const effectStr = this.formatEffects(node.nodeEffects);
-                if (effectStr !== '') {
-                    const nodeEffectText = this.add.text(node.x + 28, node.y, effectStr, {
-                        color: '#aaffcc', fontSize: '12px', fontStyle: 'bold',
-                        stroke: '#121a2f', strokeThickness: 4
-                    }).setOrigin(0, 0.5);
-                    this.nodeEffectTextsMap.set(node.id, nodeEffectText);
+                const effectContainer = this.createEffectBars(node.x + 38, node.y, node.nodeEffects);
+                if (effectContainer) {
+                    this.nodeEffectTextsMap.set(node.id, effectContainer);
                 }
             }
         }
     }
 
     private highlightPossibleMoves(): void {
-        // Block player inputs during the cat's movement or if the goal is reached
         if (this.registry.get('goalReached') || this.isCatMoving) return;
 
         const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
@@ -650,15 +743,11 @@ export class MainScene extends Phaser.Scene {
             if (this.isFogOfWar && !this.revealedNodes.has(edge.targetId)) return;
             const nextResources = applyEffects(this.currentResources, edge.effects, this.level.maxResources);
             const isAffordable = nextResources.time >= 0 && nextResources.stamina >= 0;
+
             if (isAffordable) {
-                circle.setStrokeStyle(0); // Remove the hard border
-
-                // Summon a small cloud of glowing blue (0x88ccff) magic dust
+                circle.setStrokeStyle(0);
                 const dust = this.createMagicDustEmitter(circle.x, circle.y, 0x88ccff);
-
-                // Add the emitter to the array for easy cleanup
                 this.activeHints.push(dust);
-
             } else {
                 circle.setStrokeStyle(3, 0xff4444, 0.7);
             }
