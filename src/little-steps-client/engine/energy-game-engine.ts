@@ -258,3 +258,70 @@ export function evaluatePerformance(
 
     return { won, levelWinnable: true, timeUsed, optimalTime, timeSaved: wasted, message, rating };
 }
+
+
+export function buildCatChaseGraph(level: LevelData): LevelData {
+    if (level.catStartNodeId === undefined) return level;
+
+    const expandedNodes: GraphNode[] = [];
+    const VIRTUAL_GOAL_ID = 999999; // virtual goal
+
+    // status code： playerTurnID = p*1000 + c，catTurnID = p*1000 + c + 500
+    const pTurnId = (p: number, c: number) => p * 1000 + c;
+    const cTurnId = (p: number, c: number) => p * 1000 + c + 500;
+
+    expandedNodes.push({
+        id: VIRTUAL_GOAL_ID, x: 0, y: 0, type: NodeType.GOAL, neighbors: []
+    });
+
+    for (const pNode of level.nodes) {
+        for (const cNode of level.nodes) {
+            const isCaught = pNode.id === cNode.id;
+            const isWin = pNode.id === level.goalNodeId && !isCaught;
+
+            // player
+            let pNeighbors = [];
+            if (isWin) {
+                pNeighbors = [{ targetId: VIRTUAL_GOAL_ID, effects: [] }];
+            } else if (!isCaught) {
+                // after player moves, cat's turn
+                pNeighbors = pNode.neighbors.map(edge => ({
+                    targetId: cTurnId(edge.targetId, cNode.id),
+                    effects: edge.effects
+                }));
+            }
+
+            expandedNodes.push({
+                id: pTurnId(pNode.id, cNode.id),
+                x: pNode.x, y: pNode.y,
+                type: pNode.type,
+                nodeEffects: pNode.nodeEffects,
+                neighbors: pNeighbors
+            });
+
+            // cat
+            let cNeighbors = [];
+            if (!isWin && !isCaught) {
+                // after cat modes, player's turn
+                cNeighbors = cNode.neighbors.map(edge => ({
+                    targetId: pTurnId(pNode.id, edge.targetId),
+                    effects: []
+                }));
+            }
+
+            expandedNodes.push({
+                id: cTurnId(pNode.id, cNode.id),
+                x: cNode.x, y: cNode.y,
+                type: NodeType.DEFENDER,
+                neighbors: cNeighbors
+            });
+        }
+    }
+
+    return {
+        ...level,
+        startNodeId: pTurnId(level.startNodeId, level.catStartNodeId),
+        goalNodeId: VIRTUAL_GOAL_ID,
+        nodes: expandedNodes
+    };
+}

@@ -42,6 +42,7 @@ export type LevelData = {
     nodes: GraphNode[];
     startNodeId: number;
     goalNodeId: number;
+    catStartNodeId?: number;
     initialResources: ResourceVector;
     maxResources?: Partial<ResourceVector>;
 };
