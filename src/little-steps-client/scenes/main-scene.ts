@@ -24,6 +24,7 @@ export class MainScene extends Phaser.Scene {
     private currentResources!: ResourceVector;
     private energyGameResult!: EnergyGameResult;
     private activeHints: Phaser.GameObjects.GameObject[] = [];
+    private activeDefender: Phaser.GameObjects.Sprite | null = null; 
     constructor() {
         super('MainScene');
     }
@@ -56,6 +57,10 @@ export class MainScene extends Phaser.Scene {
         });
         this.load.image('town_tiles', 'assets/tilemap_packed.png');
         this.load.tilemapTiledJSON('map', 'assets/map.json');
+        this.load.spritesheet('squirrel_img', 'assets/squirrel.png', {
+            frameWidth: 50, 
+            frameHeight: 45 
+        });    
     }
 
     create(): void {
@@ -119,6 +124,24 @@ export class MainScene extends Phaser.Scene {
             frames: [{ key: 'puppy_run', frame: 0 }],
             frameRate: 10
         });
+
+        // 1. 原地发呆动作
+        this.anims.create({
+            key: 'squirrel_idle',
+            frames: this.anims.generateFrameNumbers('squirrel_img', { frames: [0, 1] }),
+            frameRate: 4, // 👈 降到 4，慢慢悠悠地发呆
+            repeat: -1
+        });
+
+        // 2. 逃跑跑路动作
+        this.anims.create({
+            key: 'squirrel_run',
+            frames: this.anims.generateFrameNumbers('squirrel_img', { frames: [0, 1] }), 
+            frameRate: 8, // 👈 降到 8，正常的跑步节奏，不闪瞎眼
+            repeat: -1
+        });
+
+
 
         this.registry.set('nodeType', start.type);
         this.highlightPossibleMoves();
@@ -319,7 +342,13 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
         moveStep(1);
     }
 
-    private handleMoveCompletion(targetNodeId: number, targetNode: GraphNode): void {
+   private handleMoveCompletion(targetNodeId: number, targetNode: GraphNode): void {
+        if (this.activeDefender) {
+            this.activeDefender.destroy();
+            this.activeDefender = null;
+        }
+
+        this.puppy.play('idle');
         this.puppy.play('idle');
         this.currentNodeId = targetNodeId;
         this.registry.set('node', this.currentNodeId);
@@ -445,6 +474,59 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
         btnBg.on('pointerout', () => btnBg.setFillStyle(0xffffff));
         btnBg.on('pointerdown', onClick);
     }
+   // 👇 升级版：带全屏点击拦截和闪烁提示的 RPG 对话框
+    private showDialogue(text: string, onComplete: () => void): void {
+        const { width, height } = this.scale;
+        const boxHeight = 90;
+        const boxWidth = width * 0.8;
+
+        // 1. 创建一个全屏透明层，用来拦截玩家的点击，防止点到背景的节点
+        const blocker = this.add.rectangle(0, 0, width, height, 0x000000, 0)
+            .setOrigin(0).setDepth(199).setInteractive({ useHandCursor: true });
+
+        const container = this.add.container(width / 2, height + 100).setDepth(200);
+
+        const bg = this.add.rectangle(0, 0, boxWidth, boxHeight, 0x000000, 0.8)
+            .setStrokeStyle(4, 0xffffff, 1);
+        
+        const msg = this.add.text(0, 0, text, {
+            fontSize: '22px', color: '#ffffff', fontStyle: 'bold', wordWrap: { width: boxWidth - 40 }
+        }).setOrigin(0.5);
+
+        // 2. 右下角闪烁的小三角提示
+        const indicator = this.add.text(boxWidth / 2 - 20, boxHeight / 2 - 20, '▼', {
+            fontSize: '16px', color: '#ffffff'
+        }).setOrigin(0.5);
+
+        this.tweens.add({
+            targets: indicator, y: indicator.y + 5, duration: 400, yoyo: true, repeat: -1
+        });
+
+        container.add([bg, msg, indicator]);
+
+        // 3. 动画出场
+        this.tweens.add({
+            targets: container,
+            y: height - boxHeight / 2 - 20,
+            duration: 400,
+            ease: 'Back.easeOut',
+            onComplete: () => {
+                // 👇 4. 关键：等待玩家点击屏幕任意位置
+                blocker.once('pointerdown', () => {
+                    blocker.destroy(); // 玩家点完后，销毁拦截层
+                    
+                    // 对话框退场动画
+                    this.tweens.add({
+                        targets: container, y: height + 100, alpha: 0, duration: 300, ease: 'Power2',
+                        onComplete: () => {
+                            container.destroy();
+                            onComplete(); // 触发松鼠逃跑逻辑
+                        }
+                    });
+                });
+            }
+        });
+    }
 
     private drawGraph(): void {
         for (const node of this.graph) {
@@ -524,12 +606,81 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
         const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
 
         if (currentNode.type === NodeType.DEFENDER) {
-            this.time.delayedCall(600, () => {
-                if (this.isMoving || this.isGameOver) return;
+            const alert = this.add.text(this.puppy.x, this.puppy.y - 40, '❗', { fontSize: '24px', fontStyle: 'bold' }).setOrigin(0.5).setDepth(30);
+
+            // 👇 【核心修复 1】统一重心，让松鼠的脚也踩在石子上！
+            // 取消了 y - 10 的偏移，并且使用 setOrigin(0.5, 0.9) 和小狗完全一致！
+            const squirrel = this.add.sprite(currentNode.x + 20, currentNode.y, 'squirrel_img')
+                .play('squirrel_idle') 
+                .setOrigin(0.5, 0.9) // 👈 关键：脚丫子贴地透视！
+                .setDepth(30)
+                .setScale(2)
+                .setFlipX(true);
+
+            this.showDialogue("Oh look! A playful squirrel dashed out from the bushes!", () => {
+                alert.destroy(); 
+
+                if (this.isMoving || this.isGameOver) {
+                    squirrel.destroy();
+                    return;
+                }
+
                 const targetId = this.pickDefenderMove(currentNode);
-                if (targetId !== null) this.moveToNextNode(targetId);
+                if (targetId !== null) {
+                    const targetNode = this.graph.find(n => n.id === targetId)!;
+                    
+                    // 👇 【核心修改 2】把松鼠记在“全局变量”里，方便小狗抓它
+                    this.activeDefender = squirrel;
+
+                    const edge = currentNode.neighbors.find(e => e.targetId === targetId)!;
+                    const path = (edge.pathNodes && edge.pathNodes.length > 0) ? edge.pathNodes : [{ x: targetNode.x, y: targetNode.y }];
+
+                    squirrel.play('squirrel_run'); 
+                    this.tweens.killTweensOf(squirrel); 
+
+                    const moveSquirrelStep = (index: number) => {
+                        if (index >= path.length) {
+                            // 👇 【核心修改 3】跑完路后不要 destroy！
+                            // 让松鼠停在终点，并播放 idle 动画，假装回头看狗
+                            squirrel.play('squirrel_idle'); 
+                            return;
+                        }
+
+                        const targetPoint = path[index];
+                        const prevPoint = index > 0 ? path[index - 1] : squirrel;
+
+                        if (targetPoint.x < prevPoint.x - 2) {
+                            squirrel.setFlipX(false); 
+                        } else if (targetPoint.x > prevPoint.x + 2) {
+                            squirrel.setFlipX(true);  
+                        }
+
+                        const distance = Phaser.Math.Distance.Between(squirrel.x, squirrel.y, targetPoint.x, targetPoint.y);
+                        
+                        // 速度设为 500，依然保持松鼠的轻快感
+                        const duration = (distance / 100) * 500; 
+
+                        this.tweens.add({
+                            targets: squirrel,
+                            x: targetPoint.x,
+                            y: targetPoint.y,
+                            duration: duration,
+                            ease: 'Linear',
+                            onComplete: () => moveSquirrelStep(index + 1)
+                        });
+                    };
+
+                    moveSquirrelStep(0);
+
+                    this.time.delayedCall(400, () => {
+                        this.moveToNextNode(targetId);
+                    });
+
+                } else {
+                    squirrel.destroy();
+                }
             });
-            return;
+            return; 
         }
 
         this.nodeGraphicsMap.forEach((circle, id) => {
@@ -546,10 +697,8 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
             if (isAffordable) {
                 circle.setStrokeStyle(0); // 去掉生硬的边框
 
-                // 👇 【修改 4】召唤一小团发光的蓝色(0x88ccff)魔法粉末！你也可以换成黄色(0xffdd57)
                 const dust = this.createMagicDustEmitter(circle.x, circle.y, 0x88ccff);
                 
-                // 把发射器加进数组里，方便清理
                 this.activeHints.push(dust);
                 
             } else {
