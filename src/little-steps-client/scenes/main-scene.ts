@@ -471,7 +471,7 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
         btnBg.on('pointerout', () => btnBg.setFillStyle(0xffffff));
         btnBg.on('pointerdown', onClick);
     }
-   // 👇 升级版：带全屏点击拦截和闪烁提示的 RPG 对话框
+
     private showDialogue(text: string, onComplete: () => void): void {
         const { width, height } = this.scale;
         const boxHeight = 90;
@@ -605,12 +605,12 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
         if (currentNode.type === NodeType.DEFENDER) {
             const alert = this.add.text(this.puppy.x, this.puppy.y - 40, '❗', { fontSize: '24px', fontStyle: 'bold' }).setOrigin(0.5).setDepth(30);
 
-            // 👇 【核心修复 1】统一重心，让松鼠的脚也踩在石子上！
             // 取消了 y - 10 的偏移，并且使用 setOrigin(0.5, 0.9) 和小狗完全一致！
-            const squirrel = this.add.sprite(currentNode.x + 20, currentNode.y, 'squirrel_img')
+            const squirrel = this.add.sprite(currentNode.x + 50, currentNode.y, 'squirrel_img')
                 .play('squirrel_idle') 
-                .setOrigin(0.5, 0.9) //脚丫子贴地透视！
-                .setDepth(30)
+                .setOrigin(0.5, 0.9) 
+                // 👇 【核心修改 1】小狗是 10，我们把松鼠改成 9。这样它就永远在小狗的“身后”了！
+                .setDepth(9) 
                 .setScale(2)
                 .setFlipX(true);
 
@@ -643,7 +643,7 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
                             return;
                         }
 
-                        const targetPoint = path[index];
+                       const targetPoint = path[index];
                         const prevPoint = index > 0 ? path[index - 1] : squirrel;
 
                         if (targetPoint.x < prevPoint.x - 2) {
@@ -652,15 +652,29 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
                             squirrel.setFlipX(true);  
                         }
 
-                        const distance = Phaser.Math.Distance.Between(squirrel.x, squirrel.y, targetPoint.x, targetPoint.y);
+                        // 👇 【核心修改 2】动态计算最终落脚点
+                        let finalX = targetPoint.x;
+                        let finalY = targetPoint.y;
+
+                        // 如果这是路径的最后一步（到达目标 Node）
+                        if (index === path.length - 1) {
+                            finalX = targetPoint.x + 35; // 往右偏 35 像素
+                            finalY = targetPoint.y - 10; // 往上（透视上的后方）偏 10 像素
+                        }
+
+                        const distance = Phaser.Math.Distance.Between(squirrel.x, squirrel.y, finalX, finalY);
                         
-                        // 速度设为 500，依然保持松鼠的轻快感
+                        if (distance < 2) {
+                            moveSquirrelStep(index + 1);
+                            return;
+                        }
+
                         const duration = (distance / 100) * 500; 
 
                         this.tweens.add({
                             targets: squirrel,
-                            x: targetPoint.x,
-                            y: targetPoint.y,
+                            x: finalX, // 👈 动画移动到偏移后的 X
+                            y: finalY, // 👈 动画移动到偏移后的 Y
                             duration: duration,
                             ease: 'Linear',
                             onComplete: () => moveSquirrelStep(index + 1)
