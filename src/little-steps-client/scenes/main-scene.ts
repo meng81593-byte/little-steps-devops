@@ -2,480 +2,305 @@ import Phaser from 'phaser';
 import { LEVELS } from '../levels/index';
 import { applyEffects, ResourceVector, ResourceEffect, NodeType, LevelData, GraphNode } from '../levels/level-data';
 import { computeEnergyGame, EnergyGameResult, buildCatChaseGraph } from '../engine/energy-game-engine';
+import { createDefenderTrapIcon } from '../utils/draw-utils';
 
 export class MainScene extends Phaser.Scene {
     private level!: LevelData;
     private graph!: GraphNode[];
-
     private puppy!: Phaser.GameObjects.Sprite;
-    private currentNodeId!: number;
+    private catSprite?: Phaser.GameObjects.Sprite;
+    private squirrel?: Phaser.GameObjects.Sprite;
+    private tooltipContainer!: Phaser.GameObjects.Container;
+    private tooltipBg!: Phaser.GameObjects.Rectangle;
+    private tooltipText!: Phaser.GameObjects.Text;
+    
+    private currentNodeId = 0;
+    private catNodeId?: number;
+    private levelIndex = 0;
+    
     private isMoving = false;
     private isGameOver = false;
-
     private isFogOfWar = false;
-    private revealedNodes: Set<number> = new Set();
+    private isTutorialActive = false;
+    private isCatMoving = false;
 
-    private nodeGraphicsMap: Map<number, Phaser.GameObjects.Arc> = new Map();
-    private nodeTextsMap: Map<number, Phaser.GameObjects.Text> = new Map();
-    private edgeGraphicsMap: Map<string, Phaser.GameObjects.Graphics> = new Map();
-    private edgeTextsMap: Map<string, Phaser.GameObjects.Container> = new Map();
-    private nodeEffectTextsMap: Map<number, Phaser.GameObjects.Container> = new Map();
+    private revealedNodes = new Set<number>();
+    private triggeredTraps = new Set<number>();
+    private nodeGraphicsMap = new Map<number, Phaser.GameObjects.GameObject>();
+    private nodeTextsMap = new Map<number, Phaser.GameObjects.Text>();
+    private edgeGraphicsMap = new Map<string, Phaser.GameObjects.Graphics>();
+    private edgeTextsMap = new Map<string, Phaser.GameObjects.Container>();
+    private nodeEffectTextsMap = new Map<number, Phaser.GameObjects.Container>();
+    private fogCloudsMap = new Map<number, Phaser.GameObjects.Image>();
 
     private currentResources!: ResourceVector;
     private energyGameResult!: EnergyGameResult;
     private activeHints: Phaser.GameObjects.GameObject[] = [];
-    
-    // 你的松鼠防卫者变量
-    private activeDefender: Phaser.GameObjects.Sprite | null = null; 
 
-    // 朋友的猫变量 (Cat properties)
-    private catSprite?: Phaser.GameObjects.Sprite;
-    private catNodeId?: number;
-    private isCatMoving = false;
-
-    constructor() {
-        super('MainScene');
-    }
+    constructor() { super('MainScene'); }
 
     init(data: { levelIndex: number }): void {
-        const index = data.levelIndex ?? 0;
-        this.level = LEVELS[index];
+        this.levelIndex = data.levelIndex ?? 0;
+        this.level = LEVELS[this.levelIndex];
         this.graph = this.level.nodes;
         this.currentNodeId = this.level.startNodeId;
-        this.isMoving = false;
-        this.isGameOver = false;
-
-        // Reset cat states to prevent lifecycle bugs when restarting or changing levels
-        this.catNodeId = undefined;
-        this.catSprite = undefined;
-        this.isCatMoving = false;
-
-        this.isFogOfWar = this.level.id === 'gradual-reveal';
-
-        // If this level has a cat, build the expanded graph for the engine
-        const graphForEngine = this.level.catStartNodeId !== undefined
-            ? buildCatChaseGraph(this.level)
-            : this.level;
-
+        this.isMoving = this.isGameOver = this.isCatMoving = this.isTutorialActive = false;
+        this.catNodeId = this.catSprite = this.squirrel = undefined;
+        this.isFogOfWar = this.levelIndex > 0;
+        
+        const graphForEngine = this.level.catStartNodeId !== undefined ? buildCatChaseGraph(this.level) : this.level;
         this.energyGameResult = computeEnergyGame(graphForEngine);
-        console.log('[EnergyGame] minBudget:', this.energyGameResult.minBudget);
 
-        this.revealedNodes.clear();
-        this.nodeGraphicsMap.clear();
-        this.nodeTextsMap.clear();
-        this.edgeGraphicsMap.clear();
-        this.edgeTextsMap.clear();
-        this.nodeEffectTextsMap.clear();
+        [this.revealedNodes, this.triggeredTraps].forEach(s => s.clear());
+        [this.nodeGraphicsMap, this.nodeTextsMap, this.edgeGraphicsMap, this.edgeTextsMap, this.nodeEffectTextsMap, this.fogCloudsMap].forEach(m => m.clear());
     }
 
     preload(): void {
-        this.load.spritesheet('puppy_run', 'assets/Splayer_strip4.png', {
-            frameWidth: 64,
-            frameHeight: 64
-        });
+        this.load.spritesheet('puppy_run', 'assets/Splayer_strip4.png', { frameWidth: 64, frameHeight: 64 });
+        this.load.spritesheet('squirrel_img', 'assets/squirrel.png', { frameWidth: 50, frameHeight: 45 });
         this.load.image('town_tiles', 'assets/tilemap_packed.png');
         this.load.tilemapTiledJSON('map', 'assets/map.json');
-        this.load.spritesheet('squirrel_img', 'assets/squirrel.png', {
-            frameWidth: 50, 
-            frameHeight: 45 
-        });    
+    }
+
+    private safePlay(sprite: Phaser.GameObjects.Sprite | null | undefined, key: string): void {
+        if (sprite && this.anims.exists(key) && this.anims.get(key)!.frames.length > 0) sprite.play(key, true);
     }
 
     create(): void {
-        // Ensure the bone texture exists for the map icons and flying animation
         this.createBoneTexture();
-
+        this.createCloudTexture();
         const map = this.make.tilemap({ key: 'map' });
         const tileset = map.addTilesetImage('town_tiles', 'town_tiles');
 
         if (tileset) {
-            const bgLayer = map.createLayer('background', tileset, 0, 0);
-            const mgLayer = map.createLayer('midground', tileset, 0, 0);
-            const fgLayer = map.createLayer('foreground', tileset, 0, 0);
-            if (bgLayer) bgLayer.setScale(2.5);
-            if (mgLayer) mgLayer.setScale(2.5);
-            if (fgLayer) fgLayer.setScale(2.5);
+            ['background', 'midground', 'foreground'].forEach(layer => map.createLayer(layer, tileset, 0, 0)?.setScale(2.5));
         }
 
-        const dotGraphics = this.make.graphics({ x: 0, y: 0 }).fillStyle(0xffffff, 1).fillCircle(4, 4, 4);
-        dotGraphics.generateTexture('white_dot', 8, 8);
-        dotGraphics.destroy();
+        this.make.graphics({ x: 0, y: 0 }).fillStyle(0xffffff, 1).fillCircle(4, 4, 4).generateTexture('white_dot', 8, 8).destroy();
 
         this.currentResources = { ...this.level.initialResources };
-        this.registry.set('resources', this.currentResources);
-        this.registry.set('preview', null);
-        this.registry.set('goalReached', false);
-        this.registry.set('node', this.currentNodeId);
-        this.registry.set('energyGameResult', this.energyGameResult);
-        this.registry.set('initialResources', { ...this.level.initialResources });
+        Object.entries({ resources: this.currentResources, preview: null, goalReached: false, node: this.currentNodeId, energyGameResult: this.energyGameResult, initialResources: { ...this.level.initialResources }, nodeType: this.graph.find(n => n.id === this.currentNodeId)!.type }).forEach(([k, v]) => this.registry.set(k, v));
 
         this.scene.launch('HudScene');
-
         this.drawGraph();
 
         if (this.isFogOfWar) {
-            this.nodeGraphicsMap.forEach(c => c.setAlpha(0));
-            this.nodeTextsMap.forEach(t => t.setAlpha(0));
-            this.edgeGraphicsMap.forEach(g => g.setAlpha(0));
-            this.edgeTextsMap.forEach(t => t.setAlpha(0));
-            this.nodeEffectTextsMap.forEach(t => t.setAlpha(0));
-
+            [this.nodeGraphicsMap, this.nodeTextsMap, this.edgeGraphicsMap, this.edgeTextsMap, this.nodeEffectTextsMap].forEach(m => m.forEach(o => (o as any).setAlpha(0)));
             this.revealNode(this.currentNodeId, false);
             this.revealEdgesFrom(this.currentNodeId, false);
         }
 
-        this.add.text(18, 600, `Level: ${this.level.title}`, { color: '#f6f8ff', fontSize: '14px' });
-
         const start = this.graph.find(n => n.id === this.currentNodeId)!;
+        this.puppy = this.add.sprite(start.x, start.y, 'puppy_run').setScale(1.5).setDepth(10).setOrigin(0.5, 0.9);
 
-        this.puppy = this.add.sprite(start.x, start.y, 'puppy_run');
-        this.puppy.setScale(1.5);
-        this.puppy.setDepth(10);
-        this.puppy.setOrigin(0.5, 0.9);
-
-        this.anims.create({
-            key: 'walk',
-            frames: this.anims.generateFrameNumbers('puppy_run', { start: 0, end: 3 }),
-            frameRate: 4,
-            repeat: -1
-        });
-
-        this.anims.create({
-            key: 'idle',
-            frames: [{ key: 'puppy_run', frame: 0 }],
-            frameRate: 10
-        });
-
-        this.anims.create({
-            key: 'squirrel_idle',
-            frames: this.anims.generateFrameNumbers('squirrel_img', { frames: [0, 1] }),
-            frameRate: 4,
-            repeat: -1
-        });
-
-        this.anims.create({
-            key: 'squirrel_run',
-            frames: this.anims.generateFrameNumbers('squirrel_img', { frames: [0, 1] }), 
-            frameRate: 8, 
-            repeat: -1
-        });
-
-        // Initialize the cat if it exists in the level
-        if (this.level.catStartNodeId !== undefined) {
-            this.catNodeId = this.level.catStartNodeId;
-            const catStartNode = this.graph.find(n => n.id === this.catNodeId)!;
-            this.catSprite = this.add.sprite(catStartNode.x, catStartNode.y, 'puppy_run');
-            this.catSprite.setScale(1.5).setDepth(11).setOrigin(0.5, 0.9).setTint(0xff5555);
+        const puppyFrames = this.anims.generateFrameNumbers('puppy_run', { start: 0, end: 3 });
+        if (puppyFrames.length > 0) {
+            if (!this.anims.exists('walk')) this.anims.create({ key: 'walk', frames: puppyFrames, frameRate: 4, repeat: -1 });
+            if (!this.anims.exists('idle')) this.anims.create({ key: 'idle', frames: [{ key: 'puppy_run', frame: 0 }], frameRate: 10 });
+        }
+        
+        const sqFrames = this.anims.generateFrameNumbers('squirrel_img', { frames: [0, 1] });
+        if (sqFrames.length > 0) {
+            if (!this.anims.exists('squirrel_run')) this.anims.create({ key: 'squirrel_run', frames: sqFrames, frameRate: 8, repeat: -1 });
+            if (!this.anims.exists('squirrel_idle')) this.anims.create({ key: 'squirrel_idle', frames: [{ key: 'squirrel_img', frame: 0 }], frameRate: 10 });
         }
 
-        this.registry.set('nodeType', start.type);
+        if (this.level.catStartNodeId !== undefined) {
+            this.catNodeId = this.level.catStartNodeId;
+            const catNode = this.graph.find(n => n.id === this.catNodeId)!;
+            this.catSprite = this.add.sprite(catNode.x, catNode.y, 'puppy_run').setScale(1.5).setDepth(11).setOrigin(0.5, 0.9).setTint(0xff5555);
+        }
+
+        this.tooltipContainer = this.add.container(0, 0).setDepth(1500).setAlpha(0);
+        this.tooltipBg = this.add.rectangle(0, 0, 200, 50, 0x1a252f, 0.9).setStrokeStyle(2, 0xffffff);
+        this.tooltipText = this.add.text(0, 0, '', { fontSize: '14px', color: '#ffffff', align: 'center', wordWrap: { width: 180 } }).setOrigin(0.5);
+        this.tooltipContainer.add([this.tooltipBg, this.tooltipText]);
+
         this.highlightPossibleMoves();
+
+        const tutorials = [
+            'Welcome! Guide the puppy to the House node.\nEvery move consumes Time (T) and Stamina (S).',
+            'The path ahead is hidden in the fog!\nNew nodes will only reveal themselves as you explore.',
+            'Watch out! A mischievous cat is on the prowl.\nKeep moving and do not let it catch you!'
+        ];
+
+        if (tutorials[this.levelIndex]) {
+            this.isTutorialActive = true;
+            this.showDialogue(tutorials[this.levelIndex], () => { this.isTutorialActive = false; });
+        }
+    }
+
+    private showDialogue(text: string, onComplete: () => void): void {
+        const { width, height } = this.scale;
+        const blocker = this.add.rectangle(0, 0, width, height, 0x000000, 0).setOrigin(0).setDepth(3000).setInteractive({ useHandCursor: true });
+        const container = this.add.container(width / 2, height + 100).setDepth(3001);
+        const bg = this.add.rectangle(0, 0, width * 0.8, 90, 0x000000, 0.8).setStrokeStyle(4, 0xffffff, 1);
+        const msg = this.add.text(0, 0, text, { fontSize: '22px', color: '#ffffff', fontStyle: 'bold', wordWrap: { width: width * 0.8 - 40 } }).setOrigin(0.5);
+        const ind = this.add.text(width * 0.4 - 20, 25, '▼', { fontSize: '16px', color: '#ffffff' }).setOrigin(0.5);
+        
+        this.tweens.add({ targets: ind, y: ind.y + 5, duration: 400, yoyo: true, repeat: -1 });
+        container.add([bg, msg, ind]);
+
+        this.tweens.add({ targets: container, y: height - 65, duration: 400, ease: 'Back.easeOut', onComplete: () => {
+            blocker.once('pointerdown', () => {
+                blocker.destroy();
+                this.tweens.add({ targets: container, y: height + 100, alpha: 0, duration: 300, ease: 'Power2', onComplete: () => { container.destroy(); onComplete(); }});
+            });
+        }});
     }
 
     private createBoneTexture() {
         if (this.textures.exists('bone_icon')) return;
-        const boneGfx = this.make.graphics({ x: 0, y: 0 });
-        boneGfx.fillStyle(0xffffff, 1);
-        const w = 16, h = 6, r = 4;
-
-        boneGfx.fillRoundedRect(r, r, w, h, h / 2);
-        boneGfx.fillCircle(r, h / 2 + 1, r);
-        boneGfx.fillCircle(r, h / 2 + r + 1, r);
-        boneGfx.fillCircle(w + r, h / 2 + 1, r);
-        boneGfx.fillCircle(w + r, h / 2 + r + 1, r);
-
-        boneGfx.generateTexture('bone_icon', w + r * 2, h + r * 2);
-        boneGfx.destroy();
+        this.make.graphics({ x: 0, y: 0 }).fillStyle(0xffffff, 1).fillRoundedRect(4, 4, 16, 6, 2).fillCircle(4, 7, 4).fillCircle(4, 11, 4).fillCircle(20, 7, 4).fillCircle(20, 11, 4).generateTexture('bone_icon', 24, 14).destroy();
     }
 
-    private createMagicDustEmitter(x: number, y: number, color: number): Phaser.GameObjects.GameObject {
-        const emitter = this.add.particles(x, y, 'white_dot', {
-            speed: { min: 10, max: 25 },
-            gravityY: -5,
-            emitZone: { type: 'random', source: new Phaser.Geom.Circle(0, 0, 12) },
-            scale: { start: 0, end: 0.8, ease: 'Back.easeOut' },
-            alpha: { start: 0, end: 1, ease: 'Power1.easeIn' },
-            lifespan: { min: 1000, max: 2500 },
-            frequency: 40,
-            quantity: 1,
-            tint: color,
-            blendMode: 'ADD'
-        });
-        emitter.setDepth(100);
-        return emitter;
+    private createCloudTexture() {
+        if (this.textures.exists('cloud')) return;
+        this.make.graphics({ x: 0, y: 0 })
+            .fillStyle(0xecf0f1, 1)
+            .fillCircle(35, 35, 25)
+            .fillCircle(60, 30, 30)
+            .fillCircle(85, 35, 25)
+            .fillCircle(25, 55, 20)
+            .fillCircle(50, 55, 25)
+            .fillCircle(75, 55, 25)
+            .fillCircle(95, 50, 20)
+            .fillCircle(60, 65, 20)
+            .generateTexture('cloud', 120, 90)
+            .destroy();
+    }
+
+    private createMagicDustEmitter(x: number, y: number, color: number) {
+        return this.add.particles(x, y, 'white_dot', { speed: { min: 10, max: 25 }, gravityY: -5, emitZone: { type: 'random', source: new Phaser.Geom.Circle(0, 0, 12) }, scale: { start: 0, end: 0.8 }, alpha: { start: 0, end: 1 }, lifespan: { min: 1000, max: 2500 }, frequency: 40, quantity: 1, tint: color, blendMode: 'ADD' }).setDepth(100);
     }
 
     private revealNode(nodeId: number, animate: boolean): void {
-        if (!this.revealedNodes.has(nodeId)) {
-            this.revealedNodes.add(nodeId);
-            const circle = this.nodeGraphicsMap.get(nodeId);
-            const txt = this.nodeTextsMap.get(nodeId);
-            const fxTxt = this.nodeEffectTextsMap.get(nodeId);
+        if (this.revealedNodes.has(nodeId)) return;
+        this.revealedNodes.add(nodeId);
+        
+        const targets = [this.nodeGraphicsMap.get(nodeId), this.nodeTextsMap.get(nodeId), this.nodeEffectTextsMap.get(nodeId)].filter(Boolean) as any[];
+        if (targets.length) animate ? this.tweens.add({ targets, alpha: 1, duration: 600 }) : targets.forEach(t => t.setAlpha(1));
 
-            if (circle) {
-                if (animate) {
-                    const targets: Phaser.GameObjects.GameObject[] = [circle];
-                    if (txt) targets.push(txt);
-                    if (fxTxt) targets.push(fxTxt);
-                    this.tweens.add({ targets, alpha: 1, duration: 600 });
-                } else {
-                    circle.setAlpha(1);
-                    if (txt) txt.setAlpha(1);
-                    if (fxTxt) fxTxt.setAlpha(1);
-                }
-            }
+        const cloud = this.fogCloudsMap.get(nodeId);
+        if (cloud) {
+            animate ? this.tweens.add({ targets: cloud, alpha: 0, scale: 1.5, duration: 800, ease: 'Power2', onComplete: () => cloud.destroy() }) : cloud.destroy();
+            this.fogCloudsMap.delete(nodeId);
         }
     }
 
     private revealEdgesFrom(nodeId: number, animate: boolean): void {
-        const node = this.graph.find(n => n.id === nodeId);
-        if (!node) return;
-
-        for (const edge of node.neighbors) {
-            const edgeKey = `${node.id}-${edge.targetId}`;
-            const g = this.edgeGraphicsMap.get(edgeKey);
-            const t = this.edgeTextsMap.get(edgeKey);
-
-            if (g && g.alpha === 0) {
-                if (animate) {
-                    const targets = t ? [g, t] : [g];
-                    this.tweens.add({ targets, alpha: 1, duration: 600 });
-                } else {
-                    g.setAlpha(1);
-                    if (t) t.setAlpha(1);
-                }
-            }
-
+        this.graph.find(n => n.id === nodeId)?.neighbors.forEach(edge => {
+            const targets = [this.edgeGraphicsMap.get(`${nodeId}-${edge.targetId}`), this.edgeTextsMap.get(`${nodeId}-${edge.targetId}`)].filter(Boolean) as any[];
+            if (targets.length && targets[0].alpha === 0) animate ? this.tweens.add({ targets, alpha: 1, duration: 600 }) : targets.forEach(t => t.setAlpha(1));
             this.revealNode(edge.targetId, animate);
-        }
+        });
     }
 
-    private createEffectBars(x: number, y: number, effects: ResourceEffect[] | undefined): Phaser.GameObjects.Container | null {
-        if (!effects || effects.length === 0) return null;
-
-        const container = this.add.container(x, y);
-        const graphics = this.add.graphics();
-        container.add(graphics);
-
-        const barW = 40;
-        const barH = 12;
-        const spacing = 14;
-        const totalHeight = effects.length * spacing;
-        const startY = -totalHeight / 2 + barH / 2;
-
-        effects.forEach((effect, index) => {
-            const offsetY = startY + index * spacing - barH / 2;
-
-            if (effect.resource === 'bones') {
-                const boneImg = this.add.image(-10, offsetY + barH / 2, 'bone_icon').setScale(1.1);
-                const text = this.add.text(12, offsetY + barH / 2, `+${effect.value}`, {
-                    fontSize: '12px', fontStyle: 'bold', color: '#ffffff', stroke: '#000000', strokeThickness: 3
-                }).setOrigin(0.5);
-                container.add([boneImg, text]);
-                return;
-            }
-
-            const isCost = effect.value < 0;
-
-            let mainColor = 0xffffff;
-            let resChar = 'B';
-
-            if (effect.resource === 'time') {
-                mainColor = isCost ? 0xe74c3c : 0xf1c40f;
-                resChar = 'T';
-            } else if (effect.resource === 'stamina') {
-                mainColor = isCost ? 0xe74c3c : 0x2ecc71;
-                resChar = 'S';
-            }
-
-            const valStr = effect.value > 0 ? `+${effect.value} ${resChar}` : `${effect.value} ${resChar}`;
-
-            const fillW = Math.min(Math.abs(effect.value) * 1.0, barW);
-
-            graphics.fillStyle(0x1a252f, 0.9);
-            graphics.fillRoundedRect(-barW / 2, offsetY, barW, barH, 2);
-
-            graphics.fillStyle(mainColor, 1);
-            if (isCost) {
-                graphics.fillRoundedRect(barW / 2 - fillW, offsetY, fillW, barH, 2);
+    private createEffectBars(x: number, y: number, effects: ResourceEffect[] | undefined) {
+        if (!effects?.length) return null;
+        const container = this.add.container(x, y).setDepth(5);
+        const g = this.add.graphics();
+        container.add(g);
+        
+        effects.forEach((eff, i) => {
+            const oy = (-effects.length * 14) / 2 + 6 + i * 14;
+            if (eff.resource === 'bones') {
+                container.add([this.add.image(-10, oy + 6, 'bone_icon').setScale(1.1), this.add.text(12, oy + 6, `+${eff.value}`, { fontSize: '12px', fontStyle: 'bold', color: '#fff', stroke: '#000', strokeThickness: 3 }).setOrigin(0.5)]);
             } else {
-                graphics.fillRoundedRect(-barW / 2, offsetY, fillW, barH, 2);
+                const isCost = eff.value < 0;
+                const color = eff.resource === 'time' ? (isCost ? 0xe74c3c : 0xf1c40f) : (isCost ? 0xe74c3c : 0x2ecc71);
+                const fw = Math.min(Math.abs(eff.value), 40);
+                g.fillStyle(0x1a252f, 0.9).fillRoundedRect(-20, oy, 40, 12, 2).fillStyle(color, 1).fillRoundedRect(isCost ? 20 - fw : -20, oy, fw, 12, 2).lineStyle(1, 0x000, 0.8).strokeRoundedRect(-20, oy, 40, 12, 2);
+                container.add(this.add.text(0, oy + 6.5, `${eff.value > 0 ? '+' : ''}${eff.value} ${eff.resource === 'time' ? 'T' : 'S'}`, { fontSize: '10px', fontStyle: 'bold', color: '#fff', stroke: '#000', strokeThickness: 3 }).setOrigin(0.5));
             }
-
-            graphics.lineStyle(1, 0x000000, 0.8);
-            graphics.strokeRoundedRect(-barW / 2, offsetY, barW, barH, 2);
-
-            const text = this.add.text(0, offsetY + barH / 2 + 0.5, valStr, {
-                fontSize: '10px',
-                fontStyle: 'bold',
-                color: '#ffffff',
-                stroke: '#000000',
-                strokeThickness: 3
-            }).setOrigin(0.5);
-
-            container.add(text);
         });
-
-        container.setDepth(5);
         return container;
     }
 
-    private moveToNextNode(targetNodeId: number): void {
-        if (this.isMoving || this.isGameOver || this.isCatMoving) return;
-
-        const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
-        const edge = currentNode.neighbors.find(e => e.targetId === targetNodeId);
-
-        if (!edge) {
-            return;
-        }
-
+    private moveToNextNode(targetNodeId: number, isTrapTrigger = false): void {
+        if (this.isMoving || this.isGameOver || this.isCatMoving || this.isTutorialActive) return;
+        const edge = this.graph.find(n => n.id === this.currentNodeId)?.neighbors.find(e => e.targetId === targetNodeId);
+        if (!edge) return;
+        
         const nextResources = applyEffects(this.currentResources, edge.effects, this.level.maxResources);
+        if (nextResources.time < 0 || nextResources.stamina < 0) return this.triggerDefeat(nextResources.time < 0 ? 'time' : 'stamina');
+        if (targetNodeId === this.level.goalNodeId && nextResources.bones < 1) return this.cameras.main.shake(200, 0.01) as any;
 
-        if (nextResources.time < 0) {
-            this.triggerDefeat('time');
-            return;
-        }
-
-        if (nextResources.stamina < 0) {
-            this.triggerDefeat('stamina');
-            return;
-        }
-
-        if (targetNodeId === this.level.goalNodeId && nextResources.bones < 1) {
-            this.cameras.main.shake(200, 0.01);
-            return;
-        }
-
-        this.clearHints();
-
+        this.activeHints.forEach(h => h?.destroy());
+        this.activeHints = [];
+        this.tooltipContainer.setAlpha(0);
         this.isMoving = true;
-        this.currentResources = nextResources;
-        this.registry.set('resources', this.currentResources);
+        this.registry.set('resources', this.currentResources = nextResources);
 
         const targetNode = this.graph.find(n => n.id === targetNodeId)!;
+        const triggerChase = isTrapTrigger || (edge as any).isChase;
 
-        if (edge.pathNodes && edge.pathNodes.length > 0) {
-            this.moveAlongPath(edge.pathNodes, targetNode);
-        } else {
-            if (targetNode.x < this.puppy.x) {
-                this.puppy.setFlipX(true);
-            } else if (targetNode.x > this.puppy.x) {
-                this.puppy.setFlipX(false);
+        if (edge.pathNodes?.length) {
+            if (triggerChase) {
+                this.squirrel = this.add.sprite(this.puppy.x, this.puppy.y, 'squirrel_img').setScale(1.5).setDepth(10).setOrigin(0.5, 0.9);
+                this.moveSquirrelStep(edge.pathNodes, 1, () => {});
+                this.time.delayedCall(400, () => this.moveAlongPath(edge.pathNodes!, targetNode, true));
+            } else {
+                this.moveAlongPath(edge.pathNodes, targetNode, false);
             }
-
-            this.puppy.play('walk');
-
-            this.tweens.add({
-                targets: this.puppy,
-                x: targetNode.x,
-                y: targetNode.y,
-                duration: 2500,
-                ease: 'Power2',
-                onComplete: () => {
-                    this.handleMoveCompletion(targetNodeId, targetNode);
-                }
-            });
+        } else {
+            if (triggerChase) {
+                this.squirrel = this.add.sprite(this.puppy.x, this.puppy.y, 'squirrel_img').setScale(1.5).setDepth(10).setOrigin(0.5, 0.9);
+                this.safePlay(this.squirrel.setFlipX(targetNode.x < this.squirrel.x), 'squirrel_run');
+                this.tweens.add({ targets: this.squirrel, x: targetNode.x, y: targetNode.y, duration: 1500, onComplete: () => this.safePlay(this.squirrel, 'squirrel_idle') });
+                this.time.delayedCall(400, () => {
+                    this.safePlay(this.puppy.setFlipX(targetNode.x < this.puppy.x), 'walk');
+                    this.tweens.add({ targets: this.puppy, x: targetNode.x, y: targetNode.y, duration: 2500, ease: 'Power2', onComplete: () => { this.squirrel?.destroy(); this.handleMoveCompletion(targetNodeId, targetNode); } });
+                });
+            } else {
+                this.safePlay(this.puppy.setFlipX(targetNode.x < this.puppy.x), 'walk');
+                this.tweens.add({ targets: this.puppy, x: targetNode.x, y: targetNode.y, duration: 2500, ease: 'Power2', onComplete: () => this.handleMoveCompletion(targetNodeId, targetNode) });
+            }
         }
     }
 
-    private clearHints(): void {
-        this.activeHints.forEach(hint => {
-            if (hint) {
-                hint.destroy();
-            }
-        });
-        this.activeHints = [];
+    private moveSquirrelStep(path: { x: number, y: number }[], index: number, onComplete: () => void): void {
+        if (!this.squirrel) return;
+        if (index >= path.length) {
+            this.safePlay(this.squirrel, 'squirrel_idle');
+            return onComplete();
+        }
+        const pt = path[index];
+        this.safePlay(this.squirrel.setFlipX(pt.x < this.squirrel.x), 'squirrel_run');
+        this.tweens.add({ targets: this.squirrel, x: pt.x, y: pt.y, duration: Phaser.Math.Distance.Between(this.squirrel.x, this.squirrel.y, pt.x, pt.y) * 4, onComplete: () => this.moveSquirrelStep(path, index + 1, onComplete) });
     }
 
-    private moveAlongPath(path: { x: number, y: number }[], targetNode: GraphNode): void {
-        const moveStep = (index: number) => {
-            if (index >= path.length) {
-                this.handleMoveCompletion(targetNode.id, targetNode);
-                return;
+    private moveAlongPath(path: { x: number, y: number }[], targetNode: GraphNode, isChase: boolean = false): void {
+        const moveStep = (i: number) => {
+            if (i >= path.length) {
+                if (isChase) this.squirrel?.destroy();
+                return this.handleMoveCompletion(targetNode.id, targetNode);
             }
-
-            const targetPoint = path[index];
-            const prevPoint = index > 0 ? path[index - 1] : this.puppy;
-
-            if (targetPoint.x < prevPoint.x - 2) {
-                this.puppy.setFlipX(true);
-            } else if (targetPoint.x > prevPoint.x + 2) {
-                this.puppy.setFlipX(false);
-            }
-
-            const distance = Phaser.Math.Distance.Between(this.puppy.x, this.puppy.y, targetPoint.x, targetPoint.y);
-
-            if (distance < 2) {
-                moveStep(index + 1);
-                return;
-            }
-
-            const duration = (distance / 100) * 800;
-
-            this.tweens.add({
-                targets: this.puppy,
-                x: targetPoint.x,
-                y: targetPoint.y,
-                duration: duration,
-                ease: 'Linear',
-                onComplete: () => {
-                    moveStep(index + 1);
-                }
-            });
+            const pt = path[i], prev = i > 0 ? path[i - 1] : this.puppy;
+            if (Math.abs(pt.x - (prev as any).x) > 2) this.puppy.setFlipX(pt.x < (prev as any).x);
+            const dist = Phaser.Math.Distance.Between(this.puppy.x, this.puppy.y, pt.x, pt.y);
+            dist < 2 ? moveStep(i + 1) : this.tweens.add({ targets: this.puppy, x: pt.x, y: pt.y, duration: dist * 8, ease: 'Linear', onComplete: () => moveStep(i + 1) });
         };
-
-        this.puppy.play('walk');
+        this.safePlay(this.puppy, 'walk');
         moveStep(1);
     }
 
-   private handleMoveCompletion(targetNodeId: number, targetNode: GraphNode): void {
-        if (this.activeDefender) {
-            this.activeDefender.destroy();
-            this.activeDefender = null;
-        }
-
-        this.puppy.play('idle');
-        this.currentNodeId = targetNodeId;
-        this.registry.set('node', this.currentNodeId);
+    private handleMoveCompletion(targetNodeId: number, targetNode: GraphNode): void {
+        this.safePlay(this.puppy, 'idle');
+        this.registry.set('node', this.currentNodeId = targetNodeId);
         this.registry.set('nodeType', targetNode.type);
 
-        if (targetNode.nodeEffects && targetNode.nodeEffects.length > 0) {
-            this.currentResources = applyEffects(this.currentResources, targetNode.nodeEffects, this.level.maxResources);
-            this.registry.set('resources', this.currentResources);
-
-            const boneEffect = targetNode.nodeEffects.find(e => e.resource === 'bones' && e.value > 0);
-            if (boneEffect && !this.registry.get(`bone_collected_${targetNodeId}`)) {
-                this.registry.set(`bone_collected_${targetNodeId}`, true);
-
-                const effectUI = this.nodeEffectTextsMap.get(targetNodeId);
-                if (effectUI) {
-                    this.tweens.add({ targets: effectUI, alpha: 0, duration: 300 });
-                }
-
-                const flyingBone = this.add.image(this.puppy.x, this.puppy.y - 30, 'bone_icon').setScale(1.5).setDepth(200);
-                const targetX = this.cameras.main.scrollX + 430;
-                const targetY = this.cameras.main.scrollY + 60;
-
-                this.tweens.add({
-                    targets: flyingBone,
-                    x: targetX,
-                    y: targetY,
-                    scale: 2.5,
-                    rotation: Math.PI * 4,
-                    duration: 600,
-                    ease: 'Power2',
-                    onComplete: () => {
-                        flyingBone.destroy();
-                    }
-                });
+        if (targetNode.nodeEffects?.length) {
+            this.registry.set('resources', this.currentResources = applyEffects(this.currentResources, targetNode.nodeEffects, this.level.maxResources));
+            if (targetNode.nodeEffects.some(e => e.resource === 'bones' && e.value > 0) && !this.registry.get(`bone_${targetNodeId}`)) {
+                this.registry.set(`bone_${targetNodeId}`, true);
+                const ui = this.nodeEffectTextsMap.get(targetNodeId);
+                if (ui) this.tweens.add({ targets: ui, alpha: 0, duration: 300 });
+                const b = this.add.image(this.puppy.x, this.puppy.y - 30, 'bone_icon').setScale(1.5).setDepth(200);
+                this.tweens.add({ targets: b, x: this.cameras.main.scrollX + 430, y: this.cameras.main.scrollY + 60, scale: 2.5, rotation: Math.PI * 4, duration: 600, ease: 'Power2', onComplete: () => b.destroy() });
             }
         }
-
-        if (this.isFogOfWar) {
-            this.revealEdgesFrom(targetNodeId, true);
-        }
-
+        if (this.isFogOfWar) this.revealEdgesFrom(targetNodeId, true);
         this.isMoving = false;
 
         if (this.currentNodeId === this.level.goalNodeId) {
@@ -483,450 +308,159 @@ export class MainScene extends Phaser.Scene {
             this.registry.set('goalReached', true);
             this.highlightPossibleMoves();
             this.triggerVictory();
-        } else {
-            if (this.catNodeId !== undefined) {
-                if (this.currentNodeId === this.catNodeId) {
-                    this.triggerDefeat('cat');
-                } else {
-                    this.moveCat();
-                }
-            } else {
-                this.highlightPossibleMoves();
-            }
-        }
+        } else if (this.catNodeId !== undefined) {
+            this.currentNodeId === this.catNodeId ? this.triggerDefeat('cat') : this.moveCat();
+        } else this.highlightPossibleMoves();
     }
 
     private moveCat(): void {
         if (this.catNodeId === undefined || !this.catSprite || this.isGameOver) return;
-
         const catNode = this.graph.find(n => n.id === this.catNodeId)!;
-        const budgets = this.energyGameResult.nodeWinBudgets;
-
-        let bestTarget = catNode.neighbors[0]?.targetId || this.catNodeId;
-
-        if (catNode.neighbors.some(e => e.targetId === this.currentNodeId)) {
-            bestTarget = this.currentNodeId;
-        } else {
-            let maxTimeCost = -1;
-            let minPhysicalDistance = Infinity;
-
-            for (const edge of catNode.neighbors) {
-                const nextPlayerStateId = (this.currentNodeId * 1000) + edge.targetId;
-                const cost = budgets.get(nextPlayerStateId)?.time ?? 0;
-
-                const targetNode = this.graph.find(n => n.id === edge.targetId)!;
-                const playerNode = this.graph.find(n => n.id === this.currentNodeId)!;
-                const dist = Phaser.Math.Distance.Between(targetNode.x, targetNode.y, playerNode.x, playerNode.y);
-
-                if (cost > maxTimeCost) {
-                    maxTimeCost = cost;
-                    bestTarget = edge.targetId;
-                    minPhysicalDistance = dist;
-                }
-                else if (cost === maxTimeCost) {
-                    if (dist < minPhysicalDistance) {
-                        minPhysicalDistance = dist;
-                        bestTarget = edge.targetId;
-                    }
-                }
-            }
-        }
+        let bestTarget = catNode.neighbors.some(e => e.targetId === this.currentNodeId) ? this.currentNodeId : catNode.neighbors.reduce((best, edge) => {
+            const cost = this.energyGameResult.nodeWinBudgets.get((this.currentNodeId * 1000) + edge.targetId)?.time ?? 0;
+            const dist = Phaser.Math.Distance.Between(this.graph.find(n => n.id === edge.targetId)!.x, this.graph.find(n => n.id === edge.targetId)!.y, this.graph.find(n => n.id === this.currentNodeId)!.x, this.graph.find(n => n.id === this.currentNodeId)!.y);
+            return cost > best.cost || (cost === best.cost && dist < best.dist) ? { id: edge.targetId, cost, dist } : best;
+        }, { id: this.catNodeId, cost: -1, dist: Infinity }).id;
 
         this.isCatMoving = true;
         const targetNode = this.graph.find(n => n.id === bestTarget)!;
-
-        if (targetNode.x < this.catSprite.x) this.catSprite.setFlipX(true);
-        else if (targetNode.x > this.catSprite.x) this.catSprite.setFlipX(false);
-        this.catSprite.play('walk');
-
-        this.tweens.add({
-            targets: this.catSprite,
-            x: targetNode.x,
-            y: targetNode.y,
-            duration: 800,
-            ease: 'Linear',
-            onComplete: () => {
-                this.catSprite?.stop();
-                this.catNodeId = bestTarget;
-                this.isCatMoving = false;
-
-                if (this.catNodeId === this.currentNodeId) {
-                    this.triggerDefeat('cat');
-                } else {
-                    this.highlightPossibleMoves();
-                }
-            }
-        });
+        this.safePlay(this.catSprite.setFlipX(targetNode.x < this.catSprite.x), 'walk');
+        this.tweens.add({ targets: this.catSprite, x: targetNode.x, y: targetNode.y, duration: 800, ease: 'Linear', onComplete: () => {
+            this.catSprite?.stop();
+            this.catNodeId = bestTarget;
+            this.isCatMoving = false;
+            this.catNodeId === this.currentNodeId ? this.triggerDefeat('cat') : this.highlightPossibleMoves();
+        }});
     }
 
     private triggerVictory(): void {
         this.isGameOver = true;
-        this.tweens.add({
-            targets: this.puppy,
-            y: this.puppy.y - 30,
-            yoyo: true,
-            repeat: -1,
-            duration: 300,
-            ease: 'Sine.easeInOut'
-        });
+        this.tweens.add({ targets: this.puppy, y: this.puppy.y - 30, yoyo: true, repeat: -1, duration: 300, ease: 'Sine.easeInOut' });
     }
 
     private triggerDefeat(reason: 'time' | 'stamina' | 'cat'): void {
-        this.isGameOver = true;
-        this.puppy.stop();
-        this.cameras.main.shake(200, 0.01);
-
-        let message = '';
-
-        if (reason === 'cat') {
-            message = 'Oh no! The cat caught the puppy!';
-            if (this.catSprite) {
-                this.catSprite.setDepth(20);
-                this.tweens.add({
-                    targets: this.catSprite,
-                    x: this.puppy.x,
-                    y: this.puppy.y - 10,
-                    scale: 2,
-                    duration: 300,
-                    ease: 'Bounce.easeOut'
-                });
-            }
-        } else if (reason === 'time') {
-            message = 'Out of time! The puppy fell asleep.';
-            this.tweens.add({
-                targets: this.puppy,
-                angle: 90,
-                duration: 500,
-                ease: 'Bounce.easeOut'
-            });
-
-            const zzz = this.add.text(this.puppy.x + 20, this.puppy.y - 30, 'Zzz...', {
-                fontSize: '24px', color: '#ffffff', fontStyle: 'bold'
-            }).setDepth(20);
-
-            this.tweens.add({
-                targets: zzz, y: zzz.y - 40, alpha: 0, duration: 1500, repeat: -1
-            });
-
-        } else if (reason === 'stamina') {
-            message = 'Out of stamina! The puppy is too tired.';
-            this.puppy.setTint(0x88aaff);
-
-            this.tweens.add({
-                targets: this.puppy,
-                scaleX: 1.6, scaleY: 1.3,
-                yoyo: true, repeat: 3, duration: 250
-            });
-
-            const sweat = this.add.text(this.puppy.x + 10, this.puppy.y - 30, '💧', {
-                fontSize: '20px'
-            }).setDepth(20);
-
-            this.tweens.add({
-                targets: sweat, y: sweat.y + 20, alpha: 0, duration: 1000, repeat: -1
-            });
-        }
-
-        this.time.delayedCall(1500, () => {
-            this.showPopup('Defeat', message, 'Try Again', () => {
-                this.scene.stop('HudScene');
-                this.scene.restart();
-            }, false);
-        });
-    }
-
-    private showPopup(title: string, message: string, btnText: string, onClick: () => void, isWin: boolean): void {
-        const { width, height } = this.scale;
-        const overlay = this.add.rectangle(0, 0, width, height, 0x000000, 0.7).setOrigin(0).setDepth(100);
-
-        const popupBg = this.add.rectangle(width / 2, height / 2, 400, 250, isWin ? 0x27ae60 : 0xc0392b)
-            .setOrigin(0.5).setDepth(101).setStrokeStyle(4, 0xffffff);
-
-        this.add.text(width / 2, height / 2 - 70, title, {
-            fontSize: '32px', color: '#ffffff', fontStyle: 'bold'
-        }).setOrigin(0.5).setDepth(102);
-
-        this.add.text(width / 2, height / 2 - 10, message, {
-            fontSize: '18px', color: '#f6f8ff', align: 'center', wordWrap: { width: 360 }
-        }).setOrigin(0.5).setDepth(102);
-
-        const btnBg = this.add.rectangle(width / 2, height / 2 + 70, 200, 50, 0xffffff)
-            .setOrigin(0.5).setDepth(102).setInteractive({ useHandCursor: true });
-
-        this.add.text(width / 2, height / 2 + 70, btnText, {
-            fontSize: '20px', color: isWin ? '#27ae60' : '#c0392b', fontStyle: 'bold'
-        }).setOrigin(0.5).setDepth(103);
-
-        btnBg.on('pointerover', () => btnBg.setFillStyle(0xe0e0e0));
-        btnBg.on('pointerout', () => btnBg.setFillStyle(0xffffff));
-        btnBg.on('pointerdown', onClick);
-    }
-
-    private showDialogue(text: string, onComplete: () => void): void {
-        const { width, height } = this.scale;
-        const boxHeight = 90;
-        const boxWidth = width * 0.8;
-
-        const blocker = this.add.rectangle(0, 0, width, height, 0x000000, 0)
-            .setOrigin(0).setDepth(199).setInteractive({ useHandCursor: true });
-
-        const container = this.add.container(width / 2, height + 100).setDepth(200);
-
-        const bg = this.add.rectangle(0, 0, boxWidth, boxHeight, 0x000000, 0.8)
-            .setStrokeStyle(4, 0xffffff, 1);
+        this.isGameOver = true; this.puppy.stop(); this.cameras.main.shake(200, 0.01);
+        if (reason === 'cat' && this.catSprite) this.tweens.add({ targets: this.catSprite, x: this.puppy.x, y: this.puppy.y - 10, scale: 2, duration: 300, ease: 'Bounce.easeOut' });
+        else if (reason === 'time') this.tweens.add({ targets: this.puppy, angle: 90, duration: 500, ease: 'Bounce.easeOut' });
+        else if (reason === 'stamina') this.puppy.setTint(0x88aaff);
         
-        const msg = this.add.text(0, 0, text, {
-            fontSize: '22px', color: '#ffffff', fontStyle: 'bold', wordWrap: { width: boxWidth - 40 }
-        }).setOrigin(0.5);
+        this.time.delayedCall(1500, () => this.showPopup('Defeat', `Out of ${reason === 'cat' ? 'luck! Caught by cat' : reason}!`, 'Try Again', () => { this.scene.stop('HudScene'); this.scene.restart(); }, false));
+    }
 
-        const indicator = this.add.text(boxWidth / 2 - 20, boxHeight / 2 - 20, '▼', {
-            fontSize: '16px', color: '#ffffff'
-        }).setOrigin(0.5);
-
-        this.tweens.add({
-            targets: indicator, y: indicator.y + 5, duration: 400, yoyo: true, repeat: -1
-        });
-
-        container.add([bg, msg, indicator]);
-
-        this.tweens.add({
-            targets: container,
-            y: height - boxHeight / 2 - 20,
-            duration: 400,
-            ease: 'Back.easeOut',
-            onComplete: () => {
-                blocker.once('pointerdown', () => {
-                    blocker.destroy(); 
-                    
-                    this.tweens.add({
-                        targets: container, y: height + 100, alpha: 0, duration: 300, ease: 'Power2',
-                        onComplete: () => {
-                            container.destroy();
-                            onComplete(); 
-                        }
-                    });
-                });
-            }
-        });
+    private showPopup(t: string, m: string, btn: string, cb: () => void, w: boolean): void {
+        const { width: W, height: H } = this.scale;
+        this.add.rectangle(0, 0, W, H, 0x000, 0.7).setOrigin(0).setDepth(100).setInteractive();
+        this.add.rectangle(W / 2, H / 2, 400, 250, w ? 0x27ae60 : 0xc0392b).setOrigin(0.5).setDepth(101).setStrokeStyle(4, 0xfff);
+        this.add.text(W / 2, H / 2 - 70, t, { fontSize: '32px', color: '#fff', fontStyle: 'bold' }).setOrigin(0.5).setDepth(102);
+        this.add.text(W / 2, H / 2 - 10, m, { fontSize: '18px', color: '#f6f8ff', align: 'center', wordWrap: { width: 360 } }).setOrigin(0.5).setDepth(102);
+        const btnBg = this.add.rectangle(W / 2, H / 2 + 70, 200, 50, 0xfff).setOrigin(0.5).setDepth(102).setInteractive({ useHandCursor: true }).on('pointerdown', cb);
+        this.add.text(W / 2, H / 2 + 70, btn, { fontSize: '20px', color: w ? '#27ae60' : '#c0392b', fontStyle: 'bold' }).setOrigin(0.5).setDepth(103);
     }
 
     private drawGraph(): void {
-        const renderedEdgeUIs = new Set<string>();
-
-        for (const node of this.graph) {
-            for (const edge of node.neighbors) {
-                const neighbor = this.graph.find(n => n.id === edge.targetId)!;
+        const rendered = new Set<string>();
+        this.graph.forEach(node => {
+            node.neighbors.forEach(e => {
+                const neighbor = this.graph.find(n => n.id === e.targetId)!;
                 const angle = Phaser.Math.Angle.Between(node.x, node.y, neighbor.x, neighbor.y);
-                const offset = 12;
-
-                const startX = node.x + Math.cos(angle - Math.PI / 2) * offset;
-                const startY = node.y + Math.sin(angle - Math.PI / 2) * offset;
-                const endX = neighbor.x + Math.cos(angle - Math.PI / 2) * offset;
-                const endY = neighbor.y + Math.sin(angle - Math.PI / 2) * offset;
-
-                const graphics = this.add.graphics();
-                graphics.lineStyle(4, 0x87a1ff, 0.6);
-                graphics.beginPath();
-                graphics.moveTo(startX, startY);
-                graphics.lineTo(endX, endY);
-
-                const edgeKey = `${node.id}-${edge.targetId}`;
-                this.edgeGraphicsMap.set(edgeKey, graphics);
-
-                const minId = Math.min(node.id, edge.targetId);
-                const maxId = Math.max(node.id, edge.targetId);
-                const undirectedKey = `${minId}-${maxId}`;
-
-                if (!renderedEdgeUIs.has(undirectedKey)) {
-                    renderedEdgeUIs.add(undirectedKey);
-
-                    const effectContainer = this.createEffectBars(
-                        startX + (endX - startX) * 0.5,
-                        startY + (endY - startY) * 0.5,
-                        edge.effects
-                    );
-
-                    if (effectContainer) {
-                        this.edgeTextsMap.set(edgeKey, effectContainer);
-                        this.edgeTextsMap.set(`${maxId}-${minId}`, effectContainer);
-                        this.edgeTextsMap.set(`${minId}-${maxId}`, effectContainer);
-                    }
-                }
-            }
-        }
-
-        for (const node of this.graph) {
-            const nodeCircle = this.add.circle(node.x, node.y, 24, 0x000000, 0);
-            nodeCircle.setInteractive({ useHandCursor: true });
-            this.nodeGraphicsMap.set(node.id, nodeCircle);
-
-            nodeCircle.on('pointerover', () => {
-                if (this.isFogOfWar && !this.revealedNodes.has(node.id)) return;
-                if (this.registry.get('goalReached') || this.isMoving || this.isGameOver || this.isCatMoving) return;
-
-                const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
-                const edge = currentNode.neighbors.find(e => e.targetId === node.id);
-                if (edge) {
-                    let preview = applyEffects(this.currentResources, edge.effects, this.level.maxResources);
-                    if (node.nodeEffects) preview = applyEffects(preview, node.nodeEffects, this.level.maxResources);
-                    this.registry.set('preview', preview);
+                const startX = node.x + Math.cos(angle - Math.PI / 2) * 12, startY = node.y + Math.sin(angle - Math.PI / 2) * 12;
+                const endX = neighbor.x + Math.cos(angle - Math.PI / 2) * 12, endY = neighbor.y + Math.sin(angle - Math.PI / 2) * 12;
+                
+                this.edgeGraphicsMap.set(`${node.id}-${e.targetId}`, this.add.graphics().lineStyle(4, 0x87a1ff, 0.6).beginPath().moveTo(startX, startY).lineTo(endX, endY));
+                
+                const uKey = `${Math.min(node.id, e.targetId)}-${Math.max(node.id, e.targetId)}`;
+                if (!rendered.has(uKey)) {
+                    rendered.add(uKey);
+                    const ui = this.createEffectBars(startX + (endX - startX) * 0.5, startY + (endY - startY) * 0.5, e.effects);
+                    if (ui) { this.edgeTextsMap.set(`${node.id}-${e.targetId}`, ui); this.edgeTextsMap.set(`${e.targetId}-${node.id}`, ui); }
                 }
             });
 
-            nodeCircle.on('pointerout', () => this.registry.set('preview', null));
+            const obj = node.type === NodeType.DEFENDER ? createDefenderTrapIcon(this, node.x, node.y, 20).setInteractive(new Phaser.Geom.Circle(0, 0, 24), Phaser.Geom.Circle.Contains) : this.add.circle(node.x, node.y, 24, 0x000, 0).setInteractive({ useHandCursor: true });
+            this.nodeGraphicsMap.set(node.id, obj);
+            
+            if (this.isFogOfWar) {
+                const cloud = this.add.image(node.x, node.y, 'cloud').setOrigin(0.5).setDepth(40);
+                this.tweens.add({ targets: cloud, x: '+=10', duration: 2000 + Math.random() * 1000, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+                this.fogCloudsMap.set(node.id, cloud);
+            }
+            
+            const toggleTrap = (speed: number, alpha: number) => {
+                if (node.type === NodeType.DEFENDER && !this.triggeredTraps.has(node.id)) {
+                    (obj as any).getData('spikeTween')?.setTimeScale(speed);
+                    (obj as any).getData('coreGfx')?.setAlpha(alpha);
+                }
+            };
 
-            nodeCircle.on('pointerdown', () => {
-                if (this.isFogOfWar && !this.revealedNodes.has(node.id)) return;
-                this.moveToNextNode(node.id);
+            obj.on('pointerover', () => {
+                if (this.isTutorialActive || (this.isFogOfWar && !this.revealedNodes.has(node.id))) return;
+                toggleTrap(4, 0.8);
+                
+                const tt = node.type === NodeType.DEFENDER && !this.triggeredTraps.has(node.id) ? 'Defender Node:\nForces you to the highest cost path!' : node.nodeEffects?.some(e => e.resource === 'bones' && e.value > 0) ? 'Bone Node:\nCollect to increase score.' : this.levelIndex === 0 ? 'Walkable Path:\nClick to move here.' : '';
+                if (tt) this.tooltipText.setText(tt) && this.tooltipBg.setSize(this.tooltipText.width + 20, this.tooltipText.height + 20) && this.tooltipContainer.setPosition(node.x, node.y - 65).setAlpha(1);
+
+                if (!this.registry.get('goalReached') && !this.isMoving && !this.isGameOver && !this.isCatMoving) {
+                    const edge = this.graph.find(n => n.id === this.currentNodeId)?.neighbors.find(e => e.targetId === node.id);
+                    if (edge) this.registry.set('preview', applyEffects(applyEffects(this.currentResources, edge.effects, this.level.maxResources), node.nodeEffects || [], this.level.maxResources));
+                }
             });
 
-            if (node.nodeEffects && node.nodeEffects.length > 0) {
-                const effectContainer = this.createEffectBars(node.x, node.y - 36, node.nodeEffects);
-                if (effectContainer) {
-                    this.nodeEffectTextsMap.set(node.id, effectContainer);
-                }
-            }
-        }
+            obj.on('pointerout', () => { if (!this.isTutorialActive) { this.registry.set('preview', null); this.tooltipContainer.setAlpha(0); toggleTrap(1, 0.2); }});
+            obj.on('pointerdown', () => { if (!this.isTutorialActive && !(this.isFogOfWar && !this.revealedNodes.has(node.id))) this.moveToNextNode(node.id); });
+            if (node.nodeEffects?.length) this.nodeEffectTextsMap.set(node.id, this.createEffectBars(node.x, node.y - 36, node.nodeEffects)!);
+        });
     }
 
     private highlightPossibleMoves(): void {
         if (this.registry.get('goalReached') || this.isCatMoving) return;
-
-        const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
-
-        if (currentNode.type === NodeType.DEFENDER) {
+        const cur = this.graph.find(n => n.id === this.currentNodeId)!;
+        
+        if (cur.type === NodeType.DEFENDER && !this.triggeredTraps.has(cur.id)) {
             const alert = this.add.text(this.puppy.x, this.puppy.y - 40, '❗', { fontSize: '24px', fontStyle: 'bold' }).setOrigin(0.5).setDepth(30);
-
-            const squirrel = this.add.sprite(currentNode.x + 50, currentNode.y, 'squirrel_img')
-                .play('squirrel_idle') 
-                .setOrigin(0.5, 0.9) 
-                .setDepth(9) 
-                .setScale(2)
-                .setFlipX(true);
+            const sq = this.add.sprite(cur.x + 50, cur.y, 'squirrel_img').setOrigin(0.5, 0.9).setDepth(9).setScale(2).setFlipX(true);
+            this.safePlay(sq, 'squirrel_idle');
 
             this.showDialogue("Oh look! A playful squirrel dashed out from the bushes!", () => {
-                alert.destroy(); 
+                alert.destroy();
+                if (this.isMoving || this.isGameOver) return sq.destroy();
 
-                if (this.isMoving || this.isGameOver) {
-                    squirrel.destroy();
-                    return;
-                }
+                const nextId = cur.neighbors.length ? [...cur.neighbors].sort((a, b) => (this.energyGameResult?.nodeWinBudgets.get(b.targetId)?.time ?? 0) - (this.energyGameResult?.nodeWinBudgets.get(a.targetId)?.time ?? 0))[Math.random() < 0.8 ? 0 : Math.floor(Math.random() * cur.neighbors.length)].targetId : null;
+                
+                if (nextId !== null) {
+                    this.triggeredTraps.add(cur.id);
+                    const trap = this.nodeGraphicsMap.get(cur.id) as Phaser.GameObjects.Container;
+                    if (trap?.list) trap.getData('spikeTween')?.stop() || this.tweens.add({ targets: trap.list, alpha: 0.2, duration: 400 });
 
-                const targetId = this.pickDefenderMove(currentNode);
-                if (targetId !== null) {
-                    const targetNode = this.graph.find(n => n.id === targetId)!;
+                    const edge = cur.neighbors.find(e => e.targetId === nextId)!;
+                    const path = edge.pathNodes?.length ? edge.pathNodes : [{ x: this.graph.find(n=>n.id===nextId)!.x, y: this.graph.find(n=>n.id===nextId)!.y }];
                     
-                    this.activeDefender = squirrel;
+                    this.safePlay(sq, 'squirrel_run');
+                    this.tweens.killTweensOf(sq);
 
-                    const edge = currentNode.neighbors.find(e => e.targetId === targetId)!;
-                    const path = (edge.pathNodes && edge.pathNodes.length > 0) ? edge.pathNodes : [{ x: targetNode.x, y: targetNode.y }];
-
-                    squirrel.play('squirrel_run'); 
-                    this.tweens.killTweensOf(squirrel); 
-
-                    const moveSquirrelStep = (index: number) => {
-                        if (index >= path.length) {
-                            squirrel.play('squirrel_idle'); 
-                            return;
-                        }
-
-                       const targetPoint = path[index];
-                        const prevPoint = index > 0 ? path[index - 1] : squirrel;
-
-                        if (targetPoint.x < prevPoint.x - 2) {
-                            squirrel.setFlipX(false); 
-                        } else if (targetPoint.x > prevPoint.x + 2) {
-                            squirrel.setFlipX(true);  
-                        }
-
-                        let finalX = targetPoint.x;
-                        let finalY = targetPoint.y;
-
-                        if (index === path.length - 1) {
-                            finalX = targetPoint.x + 35; 
-                            finalY = targetPoint.y - 10; 
-                        }
-
-                        const distance = Phaser.Math.Distance.Between(squirrel.x, squirrel.y, finalX, finalY);
+                    const moveSquirrelStep = (i: number) => {
+                        if (i >= path.length) return this.safePlay(sq, 'squirrel_idle');
+                        const pt = path[i], prev = i > 0 ? path[i - 1] : sq;
+                        if (pt.x < (prev as any).x - 2) sq.setFlipX(false);
+                        else if (pt.x > (prev as any).x + 2) sq.setFlipX(true);
                         
-                        if (distance < 2) {
-                            moveSquirrelStep(index + 1);
-                            return;
-                        }
-
-                        const duration = (distance / 100) * 500; 
-
-                        this.tweens.add({
-                            targets: squirrel,
-                            x: finalX, 
-                            y: finalY, 
-                            duration: duration,
-                            ease: 'Linear',
-                            onComplete: () => moveSquirrelStep(index + 1)
-                        });
+                        const isLast = i === path.length - 1;
+                        const dist = Phaser.Math.Distance.Between(sq.x, sq.y, pt.x + (isLast?35:0), pt.y - (isLast?10:0));
+                        dist < 2 ? moveSquirrelStep(i + 1) : this.tweens.add({ targets: sq, x: pt.x + (isLast?35:0), y: pt.y - (isLast?10:0), duration: dist * 5, ease: 'Linear', onComplete: () => moveSquirrelStep(i + 1) });
                     };
-
                     moveSquirrelStep(0);
-
-                    this.time.delayedCall(400, () => {
-                        this.moveToNextNode(targetId);
-                    });
-
-                } else {
-                    squirrel.destroy();
-                }
-            });
-            return; 
+                    this.time.delayedCall(400, () => this.moveToNextNode(nextId));
+                } else sq.destroy();
+            }); 
+            return;
         }
 
-        this.nodeGraphicsMap.forEach((circle, id) => {
-            if (this.isFogOfWar && !this.revealedNodes.has(id)) return;
-            circle.setStrokeStyle(0);
+        this.nodeGraphicsMap.forEach((obj, id) => { if (!(this.isFogOfWar && !this.revealedNodes.has(id)) && obj instanceof Phaser.GameObjects.Arc) obj.setStrokeStyle(0); });
+        
+        cur.neighbors.forEach(e => {
+            const obj = this.nodeGraphicsMap.get(e.targetId);
+            if (!obj || (this.isFogOfWar && !this.revealedNodes.has(e.targetId))) return;
+            const res = applyEffects(this.currentResources, e.effects, this.level.maxResources);
+            res.time >= 0 && res.stamina >= 0 ? this.activeHints.push(this.createMagicDustEmitter((obj as any).x, (obj as any).y, 0x88ccff)) : (obj instanceof Phaser.GameObjects.Arc && obj.setStrokeStyle(3, 0xff4444, 0.7));
         });
-
-        currentNode.neighbors.forEach(edge => {
-            const circle = this.nodeGraphicsMap.get(edge.targetId);
-            if (!circle) return;
-            if (this.isFogOfWar && !this.revealedNodes.has(edge.targetId)) return;
-            const nextResources = applyEffects(this.currentResources, edge.effects, this.level.maxResources);
-            const isAffordable = nextResources.time >= 0 && nextResources.stamina >= 0;
-
-            if (isAffordable) {
-                circle.setStrokeStyle(0); 
-                const dust = this.createMagicDustEmitter(circle.x, circle.y, 0x88ccff);
-                this.activeHints.push(dust);
-            } else {
-                circle.setStrokeStyle(3, 0xff4444, 0.7);
-            }
-        });
-    }
-
-    private pickDefenderMove(defenderNode: GraphNode): number | null {
-        if (defenderNode.neighbors.length === 0) return null;
-
-        const budgets = this.energyGameResult?.nodeWinBudgets;
-
-        if (budgets) {
-            let worstTarget = defenderNode.neighbors[0].targetId;
-            let worstTime = -Infinity;
-            for (const edge of defenderNode.neighbors) {
-                const b = budgets.get(edge.targetId);
-                const t = b ? b.time : 0;
-                if (t > worstTime) { worstTime = t; worstTarget = edge.targetId; }
-            }
-            return worstTarget;
-        }
-
-        let worst = defenderNode.neighbors[0];
-        for (const edge of defenderNode.neighbors) {
-            const cost = (edge.effects ?? [])
-                .filter(e => e.resource === 'time' && e.op === 'add')
-                .reduce((s, e) => s + e.value, 0);
-            const worstCost = (worst.effects ?? [])
-                .filter(e => e.resource === 'time' && e.op === 'add')
-                .reduce((s, e) => s + e.value, 0);
-            if (cost < worstCost) worst = edge;
-        }
-        return worst.targetId;
     }
 }
