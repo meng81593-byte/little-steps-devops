@@ -681,6 +681,7 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
                         });
                     };
 
+                    
                     moveSquirrelStep(0);
 
                     this.time.delayedCall(400, () => {
