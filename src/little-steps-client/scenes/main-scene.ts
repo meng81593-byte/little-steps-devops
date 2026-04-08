@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { LEVELS } from '../levels/index';
 import { applyEffects, ResourceVector, ResourceEffect, NodeType, LevelData, GraphNode } from '../levels/level-data';
-import { computeEnergyGame, EnergyGameResult } from '../engine/energy-game-engine';
+import { computeEnergyGame, EnergyGameResult, buildCatChaseGraph } from '../engine/energy-game-engine';
 
 export class MainScene extends Phaser.Scene {
     private level!: LevelData;
@@ -18,13 +18,21 @@ export class MainScene extends Phaser.Scene {
     private nodeGraphicsMap: Map<number, Phaser.GameObjects.Arc> = new Map();
     private nodeTextsMap: Map<number, Phaser.GameObjects.Text> = new Map();
     private edgeGraphicsMap: Map<string, Phaser.GameObjects.Graphics> = new Map();
-    private edgeTextsMap: Map<string, Phaser.GameObjects.Text> = new Map();
-    private nodeEffectTextsMap: Map<number, Phaser.GameObjects.Text> = new Map();
+    private edgeTextsMap: Map<string, Phaser.GameObjects.Container> = new Map();
+    private nodeEffectTextsMap: Map<number, Phaser.GameObjects.Container> = new Map();
 
     private currentResources!: ResourceVector;
     private energyGameResult!: EnergyGameResult;
     private activeHints: Phaser.GameObjects.GameObject[] = [];
+    
+    // 你的松鼠防卫者变量
     private activeDefender: Phaser.GameObjects.Sprite | null = null; 
+
+    // 朋友的猫变量 (Cat properties)
+    private catSprite?: Phaser.GameObjects.Sprite;
+    private catNodeId?: number;
+    private isCatMoving = false;
+
     constructor() {
         super('MainScene');
     }
@@ -37,9 +45,19 @@ export class MainScene extends Phaser.Scene {
         this.isMoving = false;
         this.isGameOver = false;
 
+        // Reset cat states to prevent lifecycle bugs when restarting or changing levels
+        this.catNodeId = undefined;
+        this.catSprite = undefined;
+        this.isCatMoving = false;
+
         this.isFogOfWar = this.level.id === 'gradual-reveal';
 
-        this.energyGameResult = computeEnergyGame(this.level);
+        // If this level has a cat, build the expanded graph for the engine
+        const graphForEngine = this.level.catStartNodeId !== undefined
+            ? buildCatChaseGraph(this.level)
+            : this.level;
+
+        this.energyGameResult = computeEnergyGame(graphForEngine);
         console.log('[EnergyGame] minBudget:', this.energyGameResult.minBudget);
 
         this.revealedNodes.clear();
@@ -64,6 +82,9 @@ export class MainScene extends Phaser.Scene {
     }
 
     create(): void {
+        // Ensure the bone texture exists for the map icons and flying animation
+        this.createBoneTexture();
+
         const map = this.make.tilemap({ key: 'map' });
         const tileset = map.addTilesetImage('town_tiles', 'town_tiles');
 
@@ -139,13 +160,35 @@ export class MainScene extends Phaser.Scene {
             repeat: -1
         });
 
-
+        // Initialize the cat if it exists in the level
+        if (this.level.catStartNodeId !== undefined) {
+            this.catNodeId = this.level.catStartNodeId;
+            const catStartNode = this.graph.find(n => n.id === this.catNodeId)!;
+            this.catSprite = this.add.sprite(catStartNode.x, catStartNode.y, 'puppy_run');
+            this.catSprite.setScale(1.5).setDepth(11).setOrigin(0.5, 0.9).setTint(0xff5555);
+        }
 
         this.registry.set('nodeType', start.type);
         this.highlightPossibleMoves();
     }
 
-private createMagicDustEmitter(x: number, y: number, color: number): Phaser.GameObjects.GameObject {
+    private createBoneTexture() {
+        if (this.textures.exists('bone_icon')) return;
+        const boneGfx = this.make.graphics({ x: 0, y: 0 });
+        boneGfx.fillStyle(0xffffff, 1);
+        const w = 16, h = 6, r = 4;
+
+        boneGfx.fillRoundedRect(r, r, w, h, h / 2);
+        boneGfx.fillCircle(r, h / 2 + 1, r);
+        boneGfx.fillCircle(r, h / 2 + r + 1, r);
+        boneGfx.fillCircle(w + r, h / 2 + 1, r);
+        boneGfx.fillCircle(w + r, h / 2 + r + 1, r);
+
+        boneGfx.generateTexture('bone_icon', w + r * 2, h + r * 2);
+        boneGfx.destroy();
+    }
+
+    private createMagicDustEmitter(x: number, y: number, color: number): Phaser.GameObjects.GameObject {
         const emitter = this.add.particles(x, y , 'white_dot', {
             // 1. 速度和重力
             speed: { min: 10, max: 25 }, 
@@ -218,25 +261,90 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
         }
     }
 
-    private formatEffects(effects: ResourceEffect[] | undefined): string {
-        if (!effects || effects.length === 0) return '';
-        return effects.map(e => {
-            const res = e.resource === 'time' ? 'T' : e.resource === 'stamina' ? 'S' : 'B';
-            if (e.op === 'set') return `${res}=${e.value}`;
-            if (e.op === 'min') return `${res}≤${e.value}`;
-            return e.value > 0 ? `+${e.value}${res}` : `${e.value}${res}`;
-        }).join('\n');
+    // Core Change: Refined effect bars for a cleaner, smaller UI footprint
+    private createEffectBars(x: number, y: number, effects: ResourceEffect[] | undefined): Phaser.GameObjects.Container | null {
+        if (!effects || effects.length === 0) return null;
+
+        const container = this.add.container(x, y);
+        const graphics = this.add.graphics();
+        container.add(graphics);
+
+        // Scaled down dimensions to reduce visual clutter
+        const barW = 40;
+        const barH = 12;
+        const spacing = 14;
+        const totalHeight = effects.length * spacing;
+        const startY = -totalHeight / 2 + barH / 2;
+
+        effects.forEach((effect, index) => {
+            const offsetY = startY + index * spacing - barH / 2;
+
+            if (effect.resource === 'bones') {
+                const boneImg = this.add.image(-10, offsetY + barH / 2, 'bone_icon').setScale(1.1);
+                const text = this.add.text(12, offsetY + barH / 2, `+${effect.value}`, {
+                    fontSize: '12px', fontStyle: 'bold', color: '#ffffff', stroke: '#000000', strokeThickness: 3
+                }).setOrigin(0.5);
+                container.add([boneImg, text]);
+                return;
+            }
+
+            const isCost = effect.value < 0;
+
+            let mainColor = 0xffffff;
+            let resChar = 'B';
+
+            if (effect.resource === 'time') {
+                mainColor = isCost ? 0xe74c3c : 0xf1c40f;
+                resChar = 'T';
+            } else if (effect.resource === 'stamina') {
+                mainColor = isCost ? 0xe74c3c : 0x2ecc71;
+                resChar = 'S';
+            }
+
+            const valStr = effect.value > 0 ? `+${effect.value} ${resChar}` : `${effect.value} ${resChar}`;
+
+            // Adjusted multiplier so high values don't overflow the smaller bars
+            const fillW = Math.min(Math.abs(effect.value) * 1.0, barW);
+
+            // Background
+            graphics.fillStyle(0x1a252f, 0.9);
+            graphics.fillRoundedRect(-barW / 2, offsetY, barW, barH, 2);
+
+            // Fill Bar
+            graphics.fillStyle(mainColor, 1);
+            if (isCost) {
+                graphics.fillRoundedRect(barW / 2 - fillW, offsetY, fillW, barH, 2);
+            } else {
+                graphics.fillRoundedRect(-barW / 2, offsetY, fillW, barH, 2);
+            }
+
+            // Outer Border
+            graphics.lineStyle(1, 0x000000, 0.8);
+            graphics.strokeRoundedRect(-barW / 2, offsetY, barW, barH, 2);
+
+            // Text Outline (Smaller Font)
+            const text = this.add.text(0, offsetY + barH / 2 + 0.5, valStr, {
+                fontSize: '10px',
+                fontStyle: 'bold',
+                color: '#ffffff',
+                stroke: '#000000',
+                strokeThickness: 3
+            }).setOrigin(0.5);
+
+            container.add(text);
+        });
+
+        container.setDepth(5);
+        return container;
     }
 
-
- private moveToNextNode(targetNodeId: number): void {
-        if (this.isMoving || this.isGameOver) return;
+    private moveToNextNode(targetNodeId: number): void {
+        if (this.isMoving || this.isGameOver || this.isCatMoving) return;
 
         const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
         const edge = currentNode.neighbors.find(e => e.targetId === targetNodeId);
 
         if (!edge) {
-            console.log("too far! Puppy can't be there!");
             return;
         }
 
@@ -346,7 +454,6 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
         }
 
         this.puppy.play('idle');
-        this.puppy.play('idle');
         this.currentNodeId = targetNodeId;
         this.registry.set('node', this.currentNodeId);
         this.registry.set('nodeType', targetNode.type);
@@ -354,6 +461,33 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
         if (targetNode.nodeEffects && targetNode.nodeEffects.length > 0) {
             this.currentResources = applyEffects(this.currentResources, targetNode.nodeEffects, this.level.maxResources);
             this.registry.set('resources', this.currentResources);
+
+            const boneEffect = targetNode.nodeEffects.find(e => e.resource === 'bones' && e.value > 0);
+            if (boneEffect && !this.registry.get(`bone_collected_${targetNodeId}`)) {
+                this.registry.set(`bone_collected_${targetNodeId}`, true);
+
+                const effectUI = this.nodeEffectTextsMap.get(targetNodeId);
+                if (effectUI) {
+                    this.tweens.add({ targets: effectUI, alpha: 0, duration: 300 });
+                }
+
+                const flyingBone = this.add.image(this.puppy.x, this.puppy.y - 30, 'bone_icon').setScale(1.5).setDepth(200);
+                const targetX = this.cameras.main.scrollX + 430;
+                const targetY = this.cameras.main.scrollY + 60;
+
+                this.tweens.add({
+                    targets: flyingBone,
+                    x: targetX,
+                    y: targetY,
+                    scale: 2.5,
+                    rotation: Math.PI * 4,
+                    duration: 600,
+                    ease: 'Power2',
+                    onComplete: () => {
+                        flyingBone.destroy();
+                    }
+                });
+            }
         }
 
         if (this.isFogOfWar) {
@@ -368,13 +502,83 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
             this.highlightPossibleMoves();
             this.triggerVictory();
         } else {
-            this.highlightPossibleMoves();
+            if (this.catNodeId !== undefined) {
+                if (this.currentNodeId === this.catNodeId) {
+                    this.triggerDefeat('cat');
+                } else {
+                    this.moveCat();
+                }
+            } else {
+                this.highlightPossibleMoves();
+            }
         }
+    }
+
+    private moveCat(): void {
+        if (this.catNodeId === undefined || !this.catSprite || this.isGameOver) return;
+
+        const catNode = this.graph.find(n => n.id === this.catNodeId)!;
+        const budgets = this.energyGameResult.nodeWinBudgets;
+
+        let bestTarget = catNode.neighbors[0]?.targetId || this.catNodeId;
+
+        if (catNode.neighbors.some(e => e.targetId === this.currentNodeId)) {
+            bestTarget = this.currentNodeId;
+        } else {
+            let maxTimeCost = -1;
+            let minPhysicalDistance = Infinity;
+
+            for (const edge of catNode.neighbors) {
+                const nextPlayerStateId = (this.currentNodeId * 1000) + edge.targetId;
+                const cost = budgets.get(nextPlayerStateId)?.time ?? 0;
+
+                const targetNode = this.graph.find(n => n.id === edge.targetId)!;
+                const playerNode = this.graph.find(n => n.id === this.currentNodeId)!;
+                const dist = Phaser.Math.Distance.Between(targetNode.x, targetNode.y, playerNode.x, playerNode.y);
+
+                if (cost > maxTimeCost) {
+                    maxTimeCost = cost;
+                    bestTarget = edge.targetId;
+                    minPhysicalDistance = dist;
+                }
+                else if (cost === maxTimeCost) {
+                    if (dist < minPhysicalDistance) {
+                        minPhysicalDistance = dist;
+                        bestTarget = edge.targetId;
+                    }
+                }
+            }
+        }
+
+        this.isCatMoving = true;
+        const targetNode = this.graph.find(n => n.id === bestTarget)!;
+
+        if (targetNode.x < this.catSprite.x) this.catSprite.setFlipX(true);
+        else if (targetNode.x > this.catSprite.x) this.catSprite.setFlipX(false);
+        this.catSprite.play('walk');
+
+        this.tweens.add({
+            targets: this.catSprite,
+            x: targetNode.x,
+            y: targetNode.y,
+            duration: 800,
+            ease: 'Linear',
+            onComplete: () => {
+                this.catSprite?.stop();
+                this.catNodeId = bestTarget;
+                this.isCatMoving = false;
+
+                if (this.catNodeId === this.currentNodeId) {
+                    this.triggerDefeat('cat');
+                } else {
+                    this.highlightPossibleMoves();
+                }
+            }
+        });
     }
 
     private triggerVictory(): void {
         this.isGameOver = true;
-        
         this.tweens.add({
             targets: this.puppy,
             y: this.puppy.y - 30,
@@ -383,25 +587,30 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
             duration: 300,
             ease: 'Sine.easeInOut'
         });
-
-        this.time.delayedCall(800, () => {
-            this.showPopup('Level Complete!', 'The puppy reached home safely! 🎉', 'Back to Menu', () => {
-                this.scene.stop('HudScene');
-                this.scene.start('MenuScene');
-            }, true);
-        });
     }
 
-    private triggerDefeat(reason: 'time' | 'stamina'): void {
+    private triggerDefeat(reason: 'time' | 'stamina' | 'cat'): void {
         this.isGameOver = true;
-        this.puppy.stop(); // Stop walk/idle animations to show defeat effect
+        this.puppy.stop();
         this.cameras.main.shake(200, 0.01);
 
         let message = '';
 
-        if (reason === 'time') {
+        if (reason === 'cat') {
+            message = 'Oh no! The cat caught the puppy!';
+            if (this.catSprite) {
+                this.catSprite.setDepth(20);
+                this.tweens.add({
+                    targets: this.catSprite,
+                    x: this.puppy.x,
+                    y: this.puppy.y - 10,
+                    scale: 2,
+                    duration: 300,
+                    ease: 'Bounce.easeOut'
+                });
+            }
+        } else if (reason === 'time') {
             message = 'Out of time! The puppy fell asleep.';
-            
             this.tweens.add({
                 targets: this.puppy,
                 angle: 90,
@@ -420,7 +629,7 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
         } else if (reason === 'stamina') {
             message = 'Out of stamina! The puppy is too tired.';
             this.puppy.setTint(0x88aaff);
-            
+
             this.tweens.add({
                 targets: this.puppy,
                 scaleX: 1.6, scaleY: 1.3,
@@ -446,7 +655,6 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
 
     private showPopup(title: string, message: string, btnText: string, onClick: () => void, isWin: boolean): void {
         const { width, height } = this.scale;
-
         const overlay = this.add.rectangle(0, 0, width, height, 0x000000, 0.7).setOrigin(0).setDepth(100);
 
         const popupBg = this.add.rectangle(width / 2, height / 2, 400, 250, isWin ? 0x27ae60 : 0xc0392b)
@@ -477,7 +685,6 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
         const boxHeight = 90;
         const boxWidth = width * 0.8;
 
-        // 1. 创建一个全屏透明层，用来拦截玩家的点击，防止点到背景的节点
         const blocker = this.add.rectangle(0, 0, width, height, 0x000000, 0)
             .setOrigin(0).setDepth(199).setInteractive({ useHandCursor: true });
 
@@ -490,7 +697,6 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
             fontSize: '22px', color: '#ffffff', fontStyle: 'bold', wordWrap: { width: boxWidth - 40 }
         }).setOrigin(0.5);
 
-        // 2. 右下角闪烁的小三角提示
         const indicator = this.add.text(boxWidth / 2 - 20, boxHeight / 2 - 20, '▼', {
             fontSize: '16px', color: '#ffffff'
         }).setOrigin(0.5);
@@ -501,23 +707,20 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
 
         container.add([bg, msg, indicator]);
 
-        // 3. 动画出场
         this.tweens.add({
             targets: container,
             y: height - boxHeight / 2 - 20,
             duration: 400,
             ease: 'Back.easeOut',
             onComplete: () => {
-                // 等待玩家点击屏幕任意位置
                 blocker.once('pointerdown', () => {
-                    blocker.destroy(); // 玩家点完后，销毁拦截层
+                    blocker.destroy(); 
                     
-                    // 对话框退场动画
                     this.tweens.add({
                         targets: container, y: height + 100, alpha: 0, duration: 300, ease: 'Power2',
                         onComplete: () => {
                             container.destroy();
-                            onComplete(); // 触发松鼠逃跑逻辑
+                            onComplete(); 
                         }
                     });
                 });
@@ -526,6 +729,8 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
     }
 
     private drawGraph(): void {
+        const renderedEdgeUIs = new Set<string>();
+
         for (const node of this.graph) {
             for (const edge of node.neighbors) {
                 const neighbor = this.graph.find(n => n.id === edge.targetId)!;
@@ -546,12 +751,24 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
                 const edgeKey = `${node.id}-${edge.targetId}`;
                 this.edgeGraphicsMap.set(edgeKey, graphics);
 
-                const effectStr = this.formatEffects(edge.effects);
-                if (effectStr !== '') {
-                    const text = this.add.text(startX + (endX - startX) * 0.35, startY + (endY - startY) * 0.35, effectStr, {
-                        color: '#ffaaaa', fontSize: '12px', fontStyle: 'bold', stroke: '#121a2f', strokeThickness: 4
-                    }).setOrigin(0.5);
-                    this.edgeTextsMap.set(edgeKey, text);
+                const minId = Math.min(node.id, edge.targetId);
+                const maxId = Math.max(node.id, edge.targetId);
+                const undirectedKey = `${minId}-${maxId}`;
+
+                if (!renderedEdgeUIs.has(undirectedKey)) {
+                    renderedEdgeUIs.add(undirectedKey);
+
+                    const effectContainer = this.createEffectBars(
+                        startX + (endX - startX) * 0.5,
+                        startY + (endY - startY) * 0.5,
+                        edge.effects
+                    );
+
+                    if (effectContainer) {
+                        this.edgeTextsMap.set(edgeKey, effectContainer);
+                        this.edgeTextsMap.set(`${maxId}-${minId}`, effectContainer);
+                        this.edgeTextsMap.set(`${minId}-${maxId}`, effectContainer);
+                    }
                 }
             }
         }
@@ -563,7 +780,7 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
 
             nodeCircle.on('pointerover', () => {
                 if (this.isFogOfWar && !this.revealedNodes.has(node.id)) return;
-                if (this.registry.get('goalReached') || this.isMoving || this.isGameOver) return;
+                if (this.registry.get('goalReached') || this.isMoving || this.isGameOver || this.isCatMoving) return;
 
                 const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
                 const edge = currentNode.neighbors.find(e => e.targetId === node.id);
@@ -581,35 +798,27 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
                 this.moveToNextNode(node.id);
             });
 
-            // const nodeText = this.add.text(node.x, node.y, String(node.id), { color: '#ffffff', fontSize: '16px', fontStyle: 'bold' }).setOrigin(0.5);
-            // this.nodeTextsMap.set(node.id, nodeText);
-
+            // Core Change: Render node effects (like Bones or Stamina gain) ABOVE the node to save horizontal space
             if (node.nodeEffects && node.nodeEffects.length > 0) {
-                const effectStr = this.formatEffects(node.nodeEffects);
-                if (effectStr !== '') {
-                    const nodeEffectText = this.add.text(node.x + 28, node.y, effectStr, {
-                        color: '#aaffcc', fontSize: '12px', fontStyle: 'bold',
-                        stroke: '#121a2f', strokeThickness: 4
-                    }).setOrigin(0, 0.5);
-                    this.nodeEffectTextsMap.set(node.id, nodeEffectText);
+                const effectContainer = this.createEffectBars(node.x, node.y - 36, node.nodeEffects);
+                if (effectContainer) {
+                    this.nodeEffectTextsMap.set(node.id, effectContainer);
                 }
             }
         }
     }
 
     private highlightPossibleMoves(): void {
-        if (this.registry.get('goalReached')) return;
+        if (this.registry.get('goalReached') || this.isCatMoving) return;
 
         const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
 
         if (currentNode.type === NodeType.DEFENDER) {
             const alert = this.add.text(this.puppy.x, this.puppy.y - 40, '❗', { fontSize: '24px', fontStyle: 'bold' }).setOrigin(0.5).setDepth(30);
 
-            // 取消了 y - 10 的偏移，并且使用 setOrigin(0.5, 0.9) 和小狗完全一致！
             const squirrel = this.add.sprite(currentNode.x + 50, currentNode.y, 'squirrel_img')
                 .play('squirrel_idle') 
                 .setOrigin(0.5, 0.9) 
-                // 👇 【核心修改 1】小狗是 10，我们把松鼠改成 9。这样它就永远在小狗的“身后”了！
                 .setDepth(9) 
                 .setScale(2)
                 .setFlipX(true);
@@ -626,7 +835,6 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
                 if (targetId !== null) {
                     const targetNode = this.graph.find(n => n.id === targetId)!;
                     
-                    // 把松鼠记在“全局变量”里，方便小狗抓它
                     this.activeDefender = squirrel;
 
                     const edge = currentNode.neighbors.find(e => e.targetId === targetId)!;
@@ -637,8 +845,6 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
 
                     const moveSquirrelStep = (index: number) => {
                         if (index >= path.length) {
-                            // 跑完路后不要 destroy！
-                            // 让松鼠停在终点，并播放 idle 动画，假装回头看狗
                             squirrel.play('squirrel_idle'); 
                             return;
                         }
@@ -652,14 +858,12 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
                             squirrel.setFlipX(true);  
                         }
 
-                        // 👇 【核心修改 2】动态计算最终落脚点
                         let finalX = targetPoint.x;
                         let finalY = targetPoint.y;
 
-                        // 如果这是路径的最后一步（到达目标 Node）
                         if (index === path.length - 1) {
-                            finalX = targetPoint.x + 35; // 往右偏 35 像素
-                            finalY = targetPoint.y - 10; // 往上（透视上的后方）偏 10 像素
+                            finalX = targetPoint.x + 35; 
+                            finalY = targetPoint.y - 10; 
                         }
 
                         const distance = Phaser.Math.Distance.Between(squirrel.x, squirrel.y, finalX, finalY);
@@ -673,8 +877,8 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
 
                         this.tweens.add({
                             targets: squirrel,
-                            x: finalX, // 👈 动画移动到偏移后的 X
-                            y: finalY, // 👈 动画移动到偏移后的 Y
+                            x: finalX, 
+                            y: finalY, 
                             duration: duration,
                             ease: 'Linear',
                             onComplete: () => moveSquirrelStep(index + 1)
@@ -706,13 +910,11 @@ private createMagicDustEmitter(x: number, y: number, color: number): Phaser.Game
             if (this.isFogOfWar && !this.revealedNodes.has(edge.targetId)) return;
             const nextResources = applyEffects(this.currentResources, edge.effects, this.level.maxResources);
             const isAffordable = nextResources.time >= 0 && nextResources.stamina >= 0;
+
             if (isAffordable) {
                 circle.setStrokeStyle(0); // 去掉生硬的边框
-
                 const dust = this.createMagicDustEmitter(circle.x, circle.y, 0x88ccff);
-                
                 this.activeHints.push(dust);
-                
             } else {
                 circle.setStrokeStyle(3, 0xff4444, 0.7);
             }
