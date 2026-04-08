@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { LEVELS } from '../levels/index';
 import { applyEffects, ResourceVector, ResourceEffect, NodeType, LevelData, GraphNode } from '../levels/level-data';
-import { computeEnergyGame, EnergyGameResult, buildCatChaseGraph } from '../engine/energy-game-engine';
+import { computeEnergyGame, EnergyGameResult } from '../engine/energy-game-engine'; // 👈 删除了报错的 buildCatChaseGraph
 
 export class MainScene extends Phaser.Scene {
     private level!: LevelData;
@@ -28,11 +28,6 @@ export class MainScene extends Phaser.Scene {
     // 你的松鼠防卫者变量
     private activeDefender: Phaser.GameObjects.Sprite | null = null; 
 
-    // 朋友的猫变量 (Cat properties)
-    private catSprite?: Phaser.GameObjects.Sprite;
-    private catNodeId?: number;
-    private isCatMoving = false;
-
     constructor() {
         super('MainScene');
     }
@@ -45,19 +40,10 @@ export class MainScene extends Phaser.Scene {
         this.isMoving = false;
         this.isGameOver = false;
 
-        // Reset cat states to prevent lifecycle bugs when restarting or changing levels
-        this.catNodeId = undefined;
-        this.catSprite = undefined;
-        this.isCatMoving = false;
-
         this.isFogOfWar = this.level.id === 'gradual-reveal';
 
-        // If this level has a cat, build the expanded graph for the engine
-        const graphForEngine = this.level.catStartNodeId !== undefined
-            ? buildCatChaseGraph(this.level)
-            : this.level;
-
-        this.energyGameResult = computeEnergyGame(graphForEngine);
+        // 👈 恢复成最基础的能量引擎调用，不找猫了
+        this.energyGameResult = computeEnergyGame(this.level);
         console.log('[EnergyGame] minBudget:', this.energyGameResult.minBudget);
 
         this.revealedNodes.clear();
@@ -82,7 +68,6 @@ export class MainScene extends Phaser.Scene {
     }
 
     create(): void {
-        // Ensure the bone texture exists for the map icons and flying animation
         this.createBoneTexture();
 
         const map = this.make.tilemap({ key: 'map' });
@@ -160,14 +145,6 @@ export class MainScene extends Phaser.Scene {
             repeat: -1
         });
 
-        // Initialize the cat if it exists in the level
-        if (this.level.catStartNodeId !== undefined) {
-            this.catNodeId = this.level.catStartNodeId;
-            const catStartNode = this.graph.find(n => n.id === this.catNodeId)!;
-            this.catSprite = this.add.sprite(catStartNode.x, catStartNode.y, 'puppy_run');
-            this.catSprite.setScale(1.5).setDepth(11).setOrigin(0.5, 0.9).setTint(0xff5555);
-        }
-
         this.registry.set('nodeType', start.type);
         this.highlightPossibleMoves();
     }
@@ -190,28 +167,17 @@ export class MainScene extends Phaser.Scene {
 
     private createMagicDustEmitter(x: number, y: number, color: number): Phaser.GameObjects.GameObject {
         const emitter = this.add.particles(x, y , 'white_dot', {
-            // 1. 速度和重力
             speed: { min: 10, max: 25 }, 
             gravityY: -5, 
-            
-            // 2. 发射区域
-            emitZone: { 
-                type: 'random', 
-                source: new Phaser.Geom.Circle(0, 0, 12) 
-            },
-
-            // 3. 视觉增强
+            emitZone: { type: 'random', source: new Phaser.Geom.Circle(0, 0, 12) },
             scale: { start: 0, end: 0.8, ease: 'Back.easeOut' }, 
             alpha: { start: 0, end: 1, ease: 'Power1.easeIn' }, 
             lifespan: { min: 1000, max: 2500 }, 
-            
-            frequency: 40,   // 之前是 80ms，现在 20ms 发射一次（快了 4 倍！）
-            quantity: 1,     // 之前一次发 1 个，现在一次喷 2 个（总量又翻了一倍！）
-            
+            frequency: 40,   
+            quantity: 1,     
             tint: color,
             blendMode: 'ADD' 
         });
-
         emitter.setDepth(100); 
         return emitter;
     }
@@ -261,7 +227,6 @@ export class MainScene extends Phaser.Scene {
         }
     }
 
-    // Core Change: Refined effect bars for a cleaner, smaller UI footprint
     private createEffectBars(x: number, y: number, effects: ResourceEffect[] | undefined): Phaser.GameObjects.Container | null {
         if (!effects || effects.length === 0) return null;
 
@@ -269,7 +234,6 @@ export class MainScene extends Phaser.Scene {
         const graphics = this.add.graphics();
         container.add(graphics);
 
-        // Scaled down dimensions to reduce visual clutter
         const barW = 40;
         const barH = 12;
         const spacing = 14;
@@ -303,14 +267,11 @@ export class MainScene extends Phaser.Scene {
 
             const valStr = effect.value > 0 ? `+${effect.value} ${resChar}` : `${effect.value} ${resChar}`;
 
-            // Adjusted multiplier so high values don't overflow the smaller bars
             const fillW = Math.min(Math.abs(effect.value) * 1.0, barW);
 
-            // Background
             graphics.fillStyle(0x1a252f, 0.9);
             graphics.fillRoundedRect(-barW / 2, offsetY, barW, barH, 2);
 
-            // Fill Bar
             graphics.fillStyle(mainColor, 1);
             if (isCost) {
                 graphics.fillRoundedRect(barW / 2 - fillW, offsetY, fillW, barH, 2);
@@ -318,11 +279,9 @@ export class MainScene extends Phaser.Scene {
                 graphics.fillRoundedRect(-barW / 2, offsetY, fillW, barH, 2);
             }
 
-            // Outer Border
             graphics.lineStyle(1, 0x000000, 0.8);
             graphics.strokeRoundedRect(-barW / 2, offsetY, barW, barH, 2);
 
-            // Text Outline (Smaller Font)
             const text = this.add.text(0, offsetY + barH / 2 + 0.5, valStr, {
                 fontSize: '10px',
                 fontStyle: 'bold',
@@ -339,7 +298,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     private moveToNextNode(targetNodeId: number): void {
-        if (this.isMoving || this.isGameOver || this.isCatMoving) return;
+        if (this.isMoving || this.isGameOver) return; // 👈 删除了猫的移动检查
 
         const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
         const edge = currentNode.neighbors.find(e => e.targetId === targetNodeId);
@@ -400,10 +359,10 @@ export class MainScene extends Phaser.Scene {
     private clearHints(): void {
         this.activeHints.forEach(hint => {
             if (hint) {
-                hint.destroy(); // 彻底销毁发射器
+                hint.destroy(); 
             }
         });
-        this.activeHints = []; // 清空数组
+        this.activeHints = []; 
     }
 
     private moveAlongPath(path: { x: number, y: number }[], targetNode: GraphNode): void {
@@ -502,79 +461,9 @@ export class MainScene extends Phaser.Scene {
             this.highlightPossibleMoves();
             this.triggerVictory();
         } else {
-            if (this.catNodeId !== undefined) {
-                if (this.currentNodeId === this.catNodeId) {
-                    this.triggerDefeat('cat');
-                } else {
-                    this.moveCat();
-                }
-            } else {
-                this.highlightPossibleMoves();
-            }
+            // 👈 彻底删除了猫的判定，直接触发高亮
+            this.highlightPossibleMoves();
         }
-    }
-
-    private moveCat(): void {
-        if (this.catNodeId === undefined || !this.catSprite || this.isGameOver) return;
-
-        const catNode = this.graph.find(n => n.id === this.catNodeId)!;
-        const budgets = this.energyGameResult.nodeWinBudgets;
-
-        let bestTarget = catNode.neighbors[0]?.targetId || this.catNodeId;
-
-        if (catNode.neighbors.some(e => e.targetId === this.currentNodeId)) {
-            bestTarget = this.currentNodeId;
-        } else {
-            let maxTimeCost = -1;
-            let minPhysicalDistance = Infinity;
-
-            for (const edge of catNode.neighbors) {
-                const nextPlayerStateId = (this.currentNodeId * 1000) + edge.targetId;
-                const cost = budgets.get(nextPlayerStateId)?.time ?? 0;
-
-                const targetNode = this.graph.find(n => n.id === edge.targetId)!;
-                const playerNode = this.graph.find(n => n.id === this.currentNodeId)!;
-                const dist = Phaser.Math.Distance.Between(targetNode.x, targetNode.y, playerNode.x, playerNode.y);
-
-                if (cost > maxTimeCost) {
-                    maxTimeCost = cost;
-                    bestTarget = edge.targetId;
-                    minPhysicalDistance = dist;
-                }
-                else if (cost === maxTimeCost) {
-                    if (dist < minPhysicalDistance) {
-                        minPhysicalDistance = dist;
-                        bestTarget = edge.targetId;
-                    }
-                }
-            }
-        }
-
-        this.isCatMoving = true;
-        const targetNode = this.graph.find(n => n.id === bestTarget)!;
-
-        if (targetNode.x < this.catSprite.x) this.catSprite.setFlipX(true);
-        else if (targetNode.x > this.catSprite.x) this.catSprite.setFlipX(false);
-        this.catSprite.play('walk');
-
-        this.tweens.add({
-            targets: this.catSprite,
-            x: targetNode.x,
-            y: targetNode.y,
-            duration: 800,
-            ease: 'Linear',
-            onComplete: () => {
-                this.catSprite?.stop();
-                this.catNodeId = bestTarget;
-                this.isCatMoving = false;
-
-                if (this.catNodeId === this.currentNodeId) {
-                    this.triggerDefeat('cat');
-                } else {
-                    this.highlightPossibleMoves();
-                }
-            }
-        });
     }
 
     private triggerVictory(): void {
@@ -589,27 +478,14 @@ export class MainScene extends Phaser.Scene {
         });
     }
 
-    private triggerDefeat(reason: 'time' | 'stamina' | 'cat'): void {
+    private triggerDefeat(reason: 'time' | 'stamina'): void { // 👈 删除了猫的失败状态
         this.isGameOver = true;
         this.puppy.stop();
         this.cameras.main.shake(200, 0.01);
 
         let message = '';
 
-        if (reason === 'cat') {
-            message = 'Oh no! The cat caught the puppy!';
-            if (this.catSprite) {
-                this.catSprite.setDepth(20);
-                this.tweens.add({
-                    targets: this.catSprite,
-                    x: this.puppy.x,
-                    y: this.puppy.y - 10,
-                    scale: 2,
-                    duration: 300,
-                    ease: 'Bounce.easeOut'
-                });
-            }
-        } else if (reason === 'time') {
+        if (reason === 'time') {
             message = 'Out of time! The puppy fell asleep.';
             this.tweens.add({
                 targets: this.puppy,
@@ -780,7 +656,7 @@ export class MainScene extends Phaser.Scene {
 
             nodeCircle.on('pointerover', () => {
                 if (this.isFogOfWar && !this.revealedNodes.has(node.id)) return;
-                if (this.registry.get('goalReached') || this.isMoving || this.isGameOver || this.isCatMoving) return;
+                if (this.registry.get('goalReached') || this.isMoving || this.isGameOver) return; // 👈 删除了 isCatMoving
 
                 const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
                 const edge = currentNode.neighbors.find(e => e.targetId === node.id);
@@ -798,7 +674,6 @@ export class MainScene extends Phaser.Scene {
                 this.moveToNextNode(node.id);
             });
 
-            // Core Change: Render node effects (like Bones or Stamina gain) ABOVE the node to save horizontal space
             if (node.nodeEffects && node.nodeEffects.length > 0) {
                 const effectContainer = this.createEffectBars(node.x, node.y - 36, node.nodeEffects);
                 if (effectContainer) {
@@ -809,7 +684,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     private highlightPossibleMoves(): void {
-        if (this.registry.get('goalReached') || this.isCatMoving) return;
+        if (this.registry.get('goalReached')) return; // 👈 删除了 isCatMoving
 
         const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
 
@@ -885,7 +760,6 @@ export class MainScene extends Phaser.Scene {
                         });
                     };
 
-                    
                     moveSquirrelStep(0);
 
                     this.time.delayedCall(400, () => {
@@ -912,7 +786,7 @@ export class MainScene extends Phaser.Scene {
             const isAffordable = nextResources.time >= 0 && nextResources.stamina >= 0;
 
             if (isAffordable) {
-                circle.setStrokeStyle(0); // 去掉生硬的边框
+                circle.setStrokeStyle(0); 
                 const dust = this.createMagicDustEmitter(circle.x, circle.y, 0x88ccff);
                 this.activeHints.push(dust);
             } else {
