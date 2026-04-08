@@ -24,8 +24,11 @@ export class MainScene extends Phaser.Scene {
     private currentResources!: ResourceVector;
     private energyGameResult!: EnergyGameResult;
     private activeHints: Phaser.GameObjects.GameObject[] = [];
+    
+    // 你的松鼠防卫者变量
+    private activeDefender: Phaser.GameObjects.Sprite | null = null; 
 
-    // Cat properties
+    // 朋友的猫变量 (Cat properties)
     private catSprite?: Phaser.GameObjects.Sprite;
     private catNodeId?: number;
     private isCatMoving = false;
@@ -72,6 +75,10 @@ export class MainScene extends Phaser.Scene {
         });
         this.load.image('town_tiles', 'assets/tilemap_packed.png');
         this.load.tilemapTiledJSON('map', 'assets/map.json');
+        this.load.spritesheet('squirrel_img', 'assets/squirrel.png', {
+            frameWidth: 50, 
+            frameHeight: 45 
+        });    
     }
 
     create(): void {
@@ -137,6 +144,20 @@ export class MainScene extends Phaser.Scene {
             key: 'idle',
             frames: [{ key: 'puppy_run', frame: 0 }],
             frameRate: 10
+        });
+
+        this.anims.create({
+            key: 'squirrel_idle',
+            frames: this.anims.generateFrameNumbers('squirrel_img', { frames: [0, 1] }),
+            frameRate: 4,
+            repeat: -1
+        });
+
+        this.anims.create({
+            key: 'squirrel_run',
+            frames: this.anims.generateFrameNumbers('squirrel_img', { frames: [0, 1] }), 
+            frameRate: 8, 
+            repeat: -1
         });
 
         // Initialize the cat if it exists in the level
@@ -229,7 +250,6 @@ export class MainScene extends Phaser.Scene {
         }
     }
 
-    // Core Change: Refined effect bars for a cleaner, smaller UI footprint
     private createEffectBars(x: number, y: number, effects: ResourceEffect[] | undefined): Phaser.GameObjects.Container | null {
         if (!effects || effects.length === 0) return null;
 
@@ -237,7 +257,6 @@ export class MainScene extends Phaser.Scene {
         const graphics = this.add.graphics();
         container.add(graphics);
 
-        // Scaled down dimensions to reduce visual clutter
         const barW = 40;
         const barH = 12;
         const spacing = 14;
@@ -271,14 +290,11 @@ export class MainScene extends Phaser.Scene {
 
             const valStr = effect.value > 0 ? `+${effect.value} ${resChar}` : `${effect.value} ${resChar}`;
 
-            // Adjusted multiplier so high values don't overflow the smaller bars
             const fillW = Math.min(Math.abs(effect.value) * 1.0, barW);
 
-            // Background
             graphics.fillStyle(0x1a252f, 0.9);
             graphics.fillRoundedRect(-barW / 2, offsetY, barW, barH, 2);
 
-            // Fill Bar
             graphics.fillStyle(mainColor, 1);
             if (isCost) {
                 graphics.fillRoundedRect(barW / 2 - fillW, offsetY, fillW, barH, 2);
@@ -286,11 +302,9 @@ export class MainScene extends Phaser.Scene {
                 graphics.fillRoundedRect(-barW / 2, offsetY, fillW, barH, 2);
             }
 
-            // Outer Border
             graphics.lineStyle(1, 0x000000, 0.8);
             graphics.strokeRoundedRect(-barW / 2, offsetY, barW, barH, 2);
 
-            // Text Outline (Smaller Font)
             const text = this.add.text(0, offsetY + barH / 2 + 0.5, valStr, {
                 fontSize: '10px',
                 fontStyle: 'bold',
@@ -415,7 +429,12 @@ export class MainScene extends Phaser.Scene {
         moveStep(1);
     }
 
-    private handleMoveCompletion(targetNodeId: number, targetNode: GraphNode): void {
+   private handleMoveCompletion(targetNodeId: number, targetNode: GraphNode): void {
+        if (this.activeDefender) {
+            this.activeDefender.destroy();
+            this.activeDefender = null;
+        }
+
         this.puppy.play('idle');
         this.currentNodeId = targetNodeId;
         this.registry.set('node', this.currentNodeId);
@@ -643,6 +662,54 @@ export class MainScene extends Phaser.Scene {
         btnBg.on('pointerdown', onClick);
     }
 
+    private showDialogue(text: string, onComplete: () => void): void {
+        const { width, height } = this.scale;
+        const boxHeight = 90;
+        const boxWidth = width * 0.8;
+
+        const blocker = this.add.rectangle(0, 0, width, height, 0x000000, 0)
+            .setOrigin(0).setDepth(199).setInteractive({ useHandCursor: true });
+
+        const container = this.add.container(width / 2, height + 100).setDepth(200);
+
+        const bg = this.add.rectangle(0, 0, boxWidth, boxHeight, 0x000000, 0.8)
+            .setStrokeStyle(4, 0xffffff, 1);
+        
+        const msg = this.add.text(0, 0, text, {
+            fontSize: '22px', color: '#ffffff', fontStyle: 'bold', wordWrap: { width: boxWidth - 40 }
+        }).setOrigin(0.5);
+
+        const indicator = this.add.text(boxWidth / 2 - 20, boxHeight / 2 - 20, '▼', {
+            fontSize: '16px', color: '#ffffff'
+        }).setOrigin(0.5);
+
+        this.tweens.add({
+            targets: indicator, y: indicator.y + 5, duration: 400, yoyo: true, repeat: -1
+        });
+
+        container.add([bg, msg, indicator]);
+
+        this.tweens.add({
+            targets: container,
+            y: height - boxHeight / 2 - 20,
+            duration: 400,
+            ease: 'Back.easeOut',
+            onComplete: () => {
+                blocker.once('pointerdown', () => {
+                    blocker.destroy(); 
+                    
+                    this.tweens.add({
+                        targets: container, y: height + 100, alpha: 0, duration: 300, ease: 'Power2',
+                        onComplete: () => {
+                            container.destroy();
+                            onComplete(); 
+                        }
+                    });
+                });
+            }
+        });
+    }
+
     private drawGraph(): void {
         const renderedEdgeUIs = new Set<string>();
 
@@ -666,7 +733,6 @@ export class MainScene extends Phaser.Scene {
                 const edgeKey = `${node.id}-${edge.targetId}`;
                 this.edgeGraphicsMap.set(edgeKey, graphics);
 
-                // Core Change: Generate an undirected key to merge bidirectional UI bars
                 const minId = Math.min(node.id, edge.targetId);
                 const maxId = Math.max(node.id, edge.targetId);
                 const undirectedKey = `${minId}-${maxId}`;
@@ -674,7 +740,6 @@ export class MainScene extends Phaser.Scene {
                 if (!renderedEdgeUIs.has(undirectedKey)) {
                     renderedEdgeUIs.add(undirectedKey);
 
-                    // Place the merged UI exactly in the center of the path (0.5 instead of 0.35)
                     const effectContainer = this.createEffectBars(
                         startX + (endX - startX) * 0.5,
                         startY + (endY - startY) * 0.5,
@@ -683,7 +748,6 @@ export class MainScene extends Phaser.Scene {
 
                     if (effectContainer) {
                         this.edgeTextsMap.set(edgeKey, effectContainer);
-                        // Map both directions to the same container so Fog of War logic works perfectly
                         this.edgeTextsMap.set(`${maxId}-${minId}`, effectContainer);
                         this.edgeTextsMap.set(`${minId}-${maxId}`, effectContainer);
                     }
@@ -716,7 +780,6 @@ export class MainScene extends Phaser.Scene {
                 this.moveToNextNode(node.id);
             });
 
-            // Core Change: Render node effects (like Bones or Stamina gain) ABOVE the node to save horizontal space
             if (node.nodeEffects && node.nodeEffects.length > 0) {
                 const effectContainer = this.createEffectBars(node.x, node.y - 36, node.nodeEffects);
                 if (effectContainer) {
@@ -732,12 +795,88 @@ export class MainScene extends Phaser.Scene {
         const currentNode = this.graph.find(n => n.id === this.currentNodeId)!;
 
         if (currentNode.type === NodeType.DEFENDER) {
-            this.time.delayedCall(600, () => {
-                if (this.isMoving || this.isGameOver) return;
+            const alert = this.add.text(this.puppy.x, this.puppy.y - 40, '❗', { fontSize: '24px', fontStyle: 'bold' }).setOrigin(0.5).setDepth(30);
+
+            const squirrel = this.add.sprite(currentNode.x + 50, currentNode.y, 'squirrel_img')
+                .play('squirrel_idle') 
+                .setOrigin(0.5, 0.9) 
+                .setDepth(9) 
+                .setScale(2)
+                .setFlipX(true);
+
+            this.showDialogue("Oh look! A playful squirrel dashed out from the bushes!", () => {
+                alert.destroy(); 
+
+                if (this.isMoving || this.isGameOver) {
+                    squirrel.destroy();
+                    return;
+                }
+
                 const targetId = this.pickDefenderMove(currentNode);
-                if (targetId !== null) this.moveToNextNode(targetId);
+                if (targetId !== null) {
+                    const targetNode = this.graph.find(n => n.id === targetId)!;
+                    
+                    this.activeDefender = squirrel;
+
+                    const edge = currentNode.neighbors.find(e => e.targetId === targetId)!;
+                    const path = (edge.pathNodes && edge.pathNodes.length > 0) ? edge.pathNodes : [{ x: targetNode.x, y: targetNode.y }];
+
+                    squirrel.play('squirrel_run'); 
+                    this.tweens.killTweensOf(squirrel); 
+
+                    const moveSquirrelStep = (index: number) => {
+                        if (index >= path.length) {
+                            squirrel.play('squirrel_idle'); 
+                            return;
+                        }
+
+                       const targetPoint = path[index];
+                        const prevPoint = index > 0 ? path[index - 1] : squirrel;
+
+                        if (targetPoint.x < prevPoint.x - 2) {
+                            squirrel.setFlipX(false); 
+                        } else if (targetPoint.x > prevPoint.x + 2) {
+                            squirrel.setFlipX(true);  
+                        }
+
+                        let finalX = targetPoint.x;
+                        let finalY = targetPoint.y;
+
+                        if (index === path.length - 1) {
+                            finalX = targetPoint.x + 35; 
+                            finalY = targetPoint.y - 10; 
+                        }
+
+                        const distance = Phaser.Math.Distance.Between(squirrel.x, squirrel.y, finalX, finalY);
+                        
+                        if (distance < 2) {
+                            moveSquirrelStep(index + 1);
+                            return;
+                        }
+
+                        const duration = (distance / 100) * 500; 
+
+                        this.tweens.add({
+                            targets: squirrel,
+                            x: finalX, 
+                            y: finalY, 
+                            duration: duration,
+                            ease: 'Linear',
+                            onComplete: () => moveSquirrelStep(index + 1)
+                        });
+                    };
+
+                    moveSquirrelStep(0);
+
+                    this.time.delayedCall(400, () => {
+                        this.moveToNextNode(targetId);
+                    });
+
+                } else {
+                    squirrel.destroy();
+                }
             });
-            return;
+            return; 
         }
 
         this.nodeGraphicsMap.forEach((circle, id) => {
@@ -753,7 +892,7 @@ export class MainScene extends Phaser.Scene {
             const isAffordable = nextResources.time >= 0 && nextResources.stamina >= 0;
 
             if (isAffordable) {
-                circle.setStrokeStyle(0);
+                circle.setStrokeStyle(0); 
                 const dust = this.createMagicDustEmitter(circle.x, circle.y, 0x88ccff);
                 this.activeHints.push(dust);
             } else {
