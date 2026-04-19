@@ -7,7 +7,7 @@ export const level3: LevelData = {
     goalNodeId: 9,
     catStartNodeId: 7,
     initialResources: { time: 100, stamina: 50, bones: 0 }, // Scaled to match Level 1
-    maxResources: { time: 100, stamina: 50, bones: 1 },
+    maxResources: { time: 100, stamina: 100, bones: 1 },
     nodes: [
         // --- Core starting path ---
         {
@@ -16,6 +16,7 @@ export const level3: LevelData = {
                 { targetId: 2, effects: [{ resource: 'time', value: -10, op: 'add' }, { resource: 'stamina', value: -5, op: 'add' }] }
             ]
         },
+
         {
             id: 2, x: 250, y: 400, type: NodeType.PLAYER, // First split point
             neighbors: [

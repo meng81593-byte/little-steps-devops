@@ -6,8 +6,9 @@ export class HudScene extends Phaser.Scene {
     private statusText!: Phaser.GameObjects.Text;
     private hintText!: Phaser.GameObjects.Text;
 
-    // UI Elements for Bars and Icons
-    private barsGraphics!: Phaser.GameObjects.Graphics;
+    // UI Elements for Icons and Text
+    private timeGroup!: Phaser.GameObjects.Group;
+    private staminaGroup!: Phaser.GameObjects.Group;
     private timeLabel!: Phaser.GameObjects.Text;
     private staminaLabel!: Phaser.GameObjects.Text;
     private timeValueText!: Phaser.GameObjects.Text;
@@ -24,7 +25,7 @@ export class HudScene extends Phaser.Scene {
     }
 
     create(): void {
-        // Create a programmatic bone texture so we don't need external assets
+        // Create a programmatic bone texture so we don't need external assets for it
         this.createBoneTexture();
 
         // HUD Background
@@ -41,10 +42,11 @@ export class HudScene extends Phaser.Scene {
             strokeThickness: 2,
         });
 
-        // Initialize Graphics for the bars
-        this.barsGraphics = this.add.graphics();
+        // Initialize Groups for the icons (replaces barsGraphics)
+        this.timeGroup = this.add.group();
+        this.staminaGroup = this.add.group();
 
-        // Labels for the bars
+        // Labels for the resource rows
         this.timeLabel = this.add.text(14, 46, 'TIME', {
             color: '#f1c40f', fontSize: '14px', fontStyle: 'bold', stroke: '#000000', strokeThickness: 2
         });
@@ -52,7 +54,7 @@ export class HudScene extends Phaser.Scene {
             color: '#2ecc71', fontSize: '14px', fontStyle: 'bold', stroke: '#000000', strokeThickness: 2
         });
 
-        // Text values to display next to the bars
+        // Text values to display next to the icons
         this.timeValueText = this.add.text(280, 46, '', {
             color: '#ffffff', fontSize: '14px', fontStyle: 'bold', stroke: '#000000', strokeThickness: 2
         });
@@ -79,8 +81,7 @@ export class HudScene extends Phaser.Scene {
             fontSize: '18px',
             backgroundColor: '#34495e',
             padding: { x: 10, y: 5 }
-        })
-            .setInteractive({ useHandCursor: true });
+        }).setInteractive({ useHandCursor: true });
 
         menuBtn.on('pointerdown', () => {
             this.registry.events.off('changedata', this.refreshStatus, this);
@@ -90,9 +91,11 @@ export class HudScene extends Phaser.Scene {
 
         this.winPopupShown = false;
 
+        // Listen for registry changes to update the HUD dynamically
         this.registry.events.on('changedata', this.refreshStatus, this);
         this.events.once('shutdown', this.shutdown, this);
 
+        // Initial render
         this.refreshStatus();
     }
 
@@ -129,27 +132,23 @@ export class HudScene extends Phaser.Scene {
         const preview = this.registry.get('preview') as ResourceVector | null;
 
         if (resources && initial) {
-            this.barsGraphics.clear();
-
-            // Use initial resources as the baseline MAX for the bars, dynamically expand if current is higher
-            const maxTime = Math.max(initial.time, resources.time, 1);
-            const maxStamina = Math.max(initial.stamina, resources.stamina, 1);
-
-            // Draw Time Bar (Yellow)
-            this.drawProgressBar(
-                this.barsGraphics, 65, 46, 200, 16,
-                resources.time, maxTime, preview ? preview.time : null,
-                0xf1c40f, 0xe74c3c, 0x00ffff
+            // Draw Time Icons (heart) - Centers vertically around y=54 to align with text
+            const timeEndX = this.drawIconBar(
+                this.timeGroup, 65, 54, 'heart',
+                resources.time, preview ? preview.time : null
             );
 
-            // Draw Stamina Bar (Green)
-            this.drawProgressBar(
-                this.barsGraphics, 65, 76, 200, 16,
-                resources.stamina, maxStamina, preview ? preview.stamina : null,
-                0x2ecc71, 0xe74c3c, 0x00ffff
+            // Draw Stamina Icons (fire) - Centers vertically around y=84
+            const stamEndX = this.drawIconBar(
+                this.staminaGroup, 65, 84, 'fire',
+                resources.stamina, preview ? preview.stamina : null
             );
 
-            // Update text values
+            // Dynamically position text directly after the drawn icons (min padding ensures it doesn't overlap labels)
+            this.timeValueText.setPosition(Math.max(180, timeEndX + 15), 46);
+            this.staminaValueText.setPosition(Math.max(180, stamEndX + 15), 76);
+
+            // Update base text values
             this.timeValueText.setText(`${resources.time}`);
             this.staminaValueText.setText(`${resources.stamina}`);
 
@@ -160,9 +159,11 @@ export class HudScene extends Phaser.Scene {
                 this.timeValueText.setText(`${resources.time}  ${timeDiff < 0 ? '⬇' : '⬆'} ${preview.time}`);
                 this.staminaValueText.setText(`${resources.stamina}  ${stamDiff < 0 ? '⬇' : '⬆'} ${preview.stamina}`);
 
+                // Color code the preview arrows and values
                 this.timeValueText.setColor(timeDiff < 0 ? '#e74c3c' : (timeDiff > 0 ? '#00ffff' : '#ffffff'));
                 this.staminaValueText.setColor(stamDiff < 0 ? '#e74c3c' : (stamDiff > 0 ? '#00ffff' : '#ffffff'));
             } else {
+                // Low resource warning colors
                 this.timeValueText.setColor(resources.time <= 10 ? '#e74c3c' : '#ffffff');
                 this.staminaValueText.setColor(resources.stamina <= 5 ? '#e74c3c' : '#ffffff');
             }
@@ -178,6 +179,7 @@ export class HudScene extends Phaser.Scene {
             }
         }
 
+        // Handle hinting and win states
         if (goalReached) {
             this.hintText.setText('Safe at home! Click Menu to play again.').setColor('#53d98a');
             if (!this.winPopupShown) {
@@ -192,49 +194,99 @@ export class HudScene extends Phaser.Scene {
     }
 
     /**
-     * Draws a customized progress bar with optional preview damage/gain segments
+     * Renders proportional icons (10 points = 1 icon) with preview support.
+     * Automatically scales large images down and uses setCrop to seamlessly
+     * combine normal parts and green/cost parts for fractional values.
      */
-    private drawProgressBar(
-        graphics: Phaser.GameObjects.Graphics,
-        x: number, y: number, width: number, height: number,
-        current: number, max: number, preview: number | null,
-        mainColor: number, costColor: number, gainColor: number
-    ) {
-        // 1. Background (Dark)
-        graphics.fillStyle(0x1a252f, 1);
-        graphics.fillRoundedRect(x, y, width, height, 4);
+    private drawIconBar(
+        group: Phaser.GameObjects.Group,
+        startX: number,
+        startY: number,
+        textureKey: string,
+        current: number,
+        preview: number | null
+    ): number {
+        group.clear(true, true);
 
-        const currentRatio = Math.max(0, Math.min(1, current / max));
-        const fillWidth = currentRatio * width;
+        // Retrieve the original pixel dimensions of the loaded texture
+        const frame = this.textures.getFrame(textureKey);
+        const origW = frame ? frame.width : 20;
+        const origH = frame ? frame.height : 20;
 
-        // 2. Base Fill
-        graphics.fillStyle(mainColor, 1);
-        graphics.fillRoundedRect(x, y, fillWidth, height, 4);
+        // Ensure 100 points (10 icons) roughly fit in ~200px width
+        const targetWidth = 18; 
+        const scale = targetWidth / origW; // Calculate the necessary scale factor
+        const spacing = targetWidth + 2;   // 2px padding between icons
 
-        // 3. Preview (Cost or Gain)
-        if (preview !== null) {
-            const previewRatio = Math.max(0, Math.min(1, preview / max));
-            const prevWidth = previewRatio * width;
+        // Determine the maximum value we need to draw (current or future preview)
+        const maxVal = Math.max(current, preview !== null ? preview : current);
+        const numIcons = Math.ceil(maxVal / 10);
 
-            if (preview < current) {
-                // Draw a red "cost" block over the end of the current bar
-                const costWidth = fillWidth - prevWidth;
-                graphics.fillStyle(costColor, 1);
-                // Draw as a normal rect to perfectly flush with the inner edge
-                graphics.fillRect(x + prevWidth, y, costWidth, height);
-            } else if (preview > current) {
-                // Draw a cyan "gain" block extending from the current bar
-                const gainWidth = prevWidth - fillWidth;
-                graphics.fillStyle(gainColor, 1);
-                graphics.fillRoundedRect(x, y, prevWidth, height, 4); // Redraw full with rounded corners
-                graphics.fillStyle(mainColor, 1);
-                graphics.fillRoundedRect(x, y, fillWidth, height, 4); // Draw main color back over it
+        for (let i = 0; i < numIcons; i++) {
+            const slotStart = i * 10;
+            const slotEnd = slotStart + 10;
+            const x = startX + i * spacing;
+
+            // Determine the parts (normal, cost, gain) for THIS specific icon slot
+            const baseEnd = preview !== null && preview < current ? preview : current;
+            const normalPoints = Math.max(0, Math.min(baseEnd, slotEnd) - Math.max(0, slotStart));
+
+            let costPoints = 0;
+            if (preview !== null && preview < current) {
+                const costStart = Math.max(slotStart, preview);
+                const costEnd = Math.min(slotEnd, current);
+                costPoints = Math.max(0, costEnd - costStart);
+            }
+
+            let gainPoints = 0;
+            if (preview !== null && preview > current) {
+                const gainStart = Math.max(slotStart, current);
+                const gainEnd = Math.min(slotEnd, preview);
+                gainPoints = Math.max(0, gainEnd - gainStart);
+            }
+
+            // 1. Draw Normal Base (Current Safe Amount)
+            if (normalPoints > 0) {
+                const img = this.add.image(x, startY, textureKey)
+                    .setOrigin(0, 0.5)
+                    .setScale(scale);
+                
+                // Crop uses original unscaled pixels
+                if (normalPoints < 10) {
+                    img.setCrop(0, 0, origW * (normalPoints / 10), origH);
+                }
+                group.add(img);
+            }
+
+            // 2. Draw Cost Amount (Upcoming Damage, Turns Green)
+            if (costPoints > 0) {
+                const img = this.add.image(x, startY, textureKey)
+                    .setOrigin(0, 0.5)
+                    .setScale(scale)
+                    .setTintFill(0x00ff00); // Tint green for cost
+                
+                // Shift the crop rect start point so it seamlessly connects with the normal base
+                const cropStartX = origW * (normalPoints / 10);
+                const cropW = origW * (costPoints / 10);
+                img.setCrop(cropStartX, 0, cropW, origH);
+                group.add(img);
+            }
+
+            // 3. Draw Gain Amount (Upcoming Heal, Original Color)
+            if (gainPoints > 0) {
+                const img = this.add.image(x, startY, textureKey)
+                    .setOrigin(0, 0.5)
+                    .setScale(scale);
+                
+                const cropStartX = origW * (normalPoints / 10);
+                const cropW = origW * (gainPoints / 10);
+                img.setCrop(cropStartX, 0, cropW, origH);
+                group.add(img);
             }
         }
 
-        // 4. Border Outline
-        graphics.lineStyle(2, 0xffffff, 0.2);
-        graphics.strokeRoundedRect(x, y, width, height, 4);
+        // Return the final X position to align text dynamically
+        return startX + numIcons * spacing;
     }
 
     private showWinPopup(): void {
