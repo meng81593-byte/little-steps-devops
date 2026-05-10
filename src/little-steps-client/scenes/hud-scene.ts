@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { ResourceVector } from '../levels/level-data';
 import { EnergyGameResult, evaluatePerformance } from '../engine/energy-game-engine';
+import { CosmeticsState, COLOR_DEFS, ACCESSORY_DEFS, CLOTH_DEFS, unlockRewardForLevel, saveCosmetics } from '../cosmetics';
 
 export class HudScene extends Phaser.Scene {
     private statusText!: Phaser.GameObjects.Text;
@@ -168,14 +169,15 @@ export class HudScene extends Phaser.Scene {
                 this.staminaValueText.setColor(resources.stamina <= 5 ? '#e74c3c' : '#ffffff');
             }
 
-            // Update Bone display (Hide icon if 0 bones)
+            // Bone display: always visible; grey when 0, white when collected
+            this.boneIcon.setVisible(true);
+            this.boneText.setVisible(true);
             if (resources.bones > 0) {
-                this.boneIcon.setVisible(true);
-                this.boneText.setVisible(true);
-                this.boneText.setText(`x ${resources.bones}`);
+                this.boneIcon.clearTint();
+                this.boneText.setText(`x ${resources.bones}`).setColor('#ffffff');
             } else {
-                this.boneIcon.setVisible(false);
-                this.boneText.setVisible(false);
+                this.boneIcon.setTint(0x888888);
+                this.boneText.setText('x 0').setColor('#888888');
             }
         }
 
@@ -293,6 +295,7 @@ export class HudScene extends Phaser.Scene {
         const initial = this.registry.get('initialResources') as ResourceVector | undefined;
         const final = this.registry.get('finalResources') as ResourceVector | undefined;
         const egResult = this.registry.get('energyGameResult') as EnergyGameResult | undefined;
+        const levelIndex = (this.registry.get('levelIndex') as number) ?? -1;
 
         let feedbackLine = '🎉 Level complete!';
         let ratingColor = '#53d98a';
@@ -300,23 +303,15 @@ export class HudScene extends Phaser.Scene {
         if (initial && final && egResult) {
             const fb = evaluatePerformance(egResult, initial, final);
             feedbackLine = fb.message;
-            ratingColor =
-                fb.rating === 'perfect' ? '#f8c146' :
-                    fb.rating === 'good' ? '#53d98a' :
-                        '#c8d3ff';
+            ratingColor = fb.rating === 'perfect' ? '#f8c146' : fb.rating === 'good' ? '#53d98a' : '#c8d3ff';
         }
 
         const cx = this.scale.width / 2;
         const cy = this.scale.height / 2;
-        const w = 420;
-        const h = 240;
+        const w = 420, h = 240;
 
-        const bg = this.add.rectangle(0, 0, w, h, 0x121a2f, 0.95)
-            .setStrokeStyle(3, 0x87a1ff, 1);
-
-        const title = this.add.text(0, -80, '🏠 Made it home!', {
-            fontSize: '28px', fontStyle: 'bold', color: '#f6f8ff'
-        }).setOrigin(0.5);
+        const bg = this.add.rectangle(0, 0, w, h, 0x121a2f, 0.95).setStrokeStyle(3, 0x87a1ff, 1);
+        const title = this.add.text(0, -80, '🏠 Made it home!', { fontSize: '28px', fontStyle: 'bold', color: '#f6f8ff' }).setOrigin(0.5);
 
         const playerLeft = final?.time ?? 0;
         const optTime = egResult?.minBudget?.time;
@@ -330,23 +325,135 @@ export class HudScene extends Phaser.Scene {
             fontSize: '18px', color: ratingColor, wordWrap: { width: w - 40 }, align: 'center', fontStyle: 'bold'
         }).setOrigin(0.5);
 
-        const btnBg = this.add.rectangle(0, 80, 160, 40, 0x34495e)
-            .setInteractive({ useHandCursor: true });
-        const btnTxt = this.add.text(0, 80, '🏠 Menu', {
-            fontSize: '18px', color: '#f6f8ff'
-        }).setOrigin(0.5);
+        const hasReward = levelIndex >= 1 && levelIndex <= 3;
+        const items: Phaser.GameObjects.GameObject[] = [bg, title, resourceLine, feedback];
 
-        btnBg.on('pointerdown', () => {
+        const goMenu = () => {
+            this.registry.events.off('changedata', this.refreshStatus, this);
+            this.scene.stop('MainScene');
+            this.scene.start('MenuScene');
+        };
+
+        if (hasReward) {
+            const rewardState = unlockRewardForLevel(levelIndex);
+
+            const rewardBtnBg = this.add.rectangle(-95, 80, 170, 40, 0xFFD700).setInteractive({ useHandCursor: true });
+            const rewardBtnTxt = this.add.text(-95, 80, '🎁 Customize', { fontSize: '15px', fontStyle: 'bold', color: '#1a1a1a' }).setOrigin(0.5);
+            const menuBtnBg = this.add.rectangle(95, 80, 130, 40, 0x34495e).setInteractive({ useHandCursor: true });
+            const menuBtnTxt = this.add.text(95, 80, '🏠 Menu', { fontSize: '15px', color: '#f6f8ff' }).setOrigin(0.5);
+
+            rewardBtnBg.on('pointerdown', () => this.showRewardPopup(levelIndex, rewardState));
+            menuBtnBg.on('pointerdown', goMenu);
+            items.push(rewardBtnBg, rewardBtnTxt, menuBtnBg, menuBtnTxt);
+        } else {
+            const btnBg = this.add.rectangle(0, 80, 160, 40, 0x34495e).setInteractive({ useHandCursor: true });
+            const btnTxt = this.add.text(0, 80, '🏠 Menu', { fontSize: '18px', color: '#f6f8ff' }).setOrigin(0.5);
+            btnBg.on('pointerdown', goMenu);
+            items.push(btnBg, btnTxt);
+        }
+
+        this.winPopup = this.add.container(cx, cy, items).setDepth(100).setAlpha(0);
+        this.tweens.add({ targets: this.winPopup, alpha: 1, duration: 400, ease: 'Power2' });
+    }
+
+    private showRewardPopup(levelIndex: number, state: CosmeticsState): void {
+        const { width: W, height: H } = this.scale;
+        const mutableState: CosmeticsState = { ...state, unlockedColors: [...state.unlockedColors], unlockedAccessories: [...state.unlockedAccessories], unlockedClothes: [...state.unlockedClothes] };
+        const panelW = 500, panelH = 300;
+        const cx = W / 2, cy = H / 2;
+
+        const overlay = this.add.rectangle(0, 0, W, H, 0x000000, 0.72).setOrigin(0).setDepth(200).setInteractive();
+
+        const rewardTitles: Record<number, string> = {
+            1: '🎨 Choose Your Puppy Color',
+            2: '🎀 Choose an Accessory',
+            3: '👔 Choose an Outfit',
+        };
+
+        const panelItems: Phaser.GameObjects.GameObject[] = [];
+        panelItems.push(this.add.rectangle(0, 0, panelW, panelH, 0x0d1b2a, 0.97).setStrokeStyle(3, 0xFFD700, 1));
+        panelItems.push(this.add.text(0, -panelH / 2 + 32, rewardTitles[levelIndex] ?? '', { fontSize: '20px', fontStyle: 'bold', color: '#FFD700' }).setOrigin(0.5));
+        panelItems.push(this.add.text(0, -panelH / 2 + 60, 'Click to select — puppy updates live!', { fontSize: '13px', color: '#c8d3ff' }).setOrigin(0.5));
+
+        const notifyMainScene = () => (this.scene.get('MainScene') as any)?.applyCosmetics?.();
+
+        if (levelIndex === 1) {
+            const colors = COLOR_DEFS.filter(c => mutableState.unlockedColors.includes(c.id));
+            const startX = -(colors.length * 58) / 2 + 29;
+            const rings: Phaser.GameObjects.Arc[] = [];
+
+            colors.forEach((def, i) => {
+                const ox = startX + i * 58, oy = -10;
+                const ring = this.add.circle(ox, oy, 27, 0x000000, 0).setStrokeStyle(3, 0xFFD700, mutableState.selectedColor === def.id ? 1 : 0);
+                const swatch = this.add.circle(ox, oy, 22, def.swatch).setInteractive({ useHandCursor: true });
+                const lbl = this.add.text(ox, oy + 36, def.label, { fontSize: '11px', color: '#cccccc' }).setOrigin(0.5);
+                rings.push(ring);
+                panelItems.push(ring, swatch, lbl);
+                swatch.on('pointerdown', () => {
+                    rings.forEach(r => r.setStrokeStyle(3, 0xFFD700, 0));
+                    ring.setStrokeStyle(3, 0xFFD700, 1);
+                    mutableState.selectedColor = def.id;
+                    saveCosmetics(mutableState);
+                    notifyMainScene();
+                });
+            });
+        } else if (levelIndex === 2) {
+            const accs = ACCESSORY_DEFS.filter(a => mutableState.unlockedAccessories.includes(a.id));
+            const btnW = Math.min(138, Math.floor((panelW - 40) / accs.length) - 8);
+            const spacing = btnW + 8;
+            const btns: Phaser.GameObjects.Rectangle[] = [];
+            accs.forEach((def, i) => {
+                const ox = -(accs.length * spacing) / 2 + spacing / 2 + i * spacing, oy = -10;
+                const isSelected = mutableState.selectedAccessory === def.id;
+                const btn = this.add.rectangle(ox, oy, btnW, 46, def.id === 'none' ? 0x34495e : def.color, 0.85).setStrokeStyle(isSelected ? 3 : 1, 0xFFD700, isSelected ? 1 : 0.35).setInteractive({ useHandCursor: true });
+                const lbl = this.add.text(ox, oy, def.label, { fontSize: '13px', fontStyle: 'bold', color: '#fff', stroke: '#000', strokeThickness: 2 }).setOrigin(0.5);
+                btns.push(btn);
+                panelItems.push(btn, lbl);
+                btn.on('pointerdown', () => {
+                    btns.forEach(b => b.setStrokeStyle(1, 0xFFD700, 0.35));
+                    btn.setStrokeStyle(3, 0xFFD700, 1);
+                    mutableState.selectedAccessory = def.id;
+                    saveCosmetics(mutableState);
+                    notifyMainScene();
+                });
+            });
+        } else if (levelIndex === 3) {
+            const cloths = CLOTH_DEFS.filter(c => mutableState.unlockedClothes.includes(c.id));
+            const btnW = Math.min(138, Math.floor((panelW - 40) / cloths.length) - 8);
+            const spacing = btnW + 8;
+            const btns: Phaser.GameObjects.Rectangle[] = [];
+            cloths.forEach((def, i) => {
+                const ox = -(cloths.length * spacing) / 2 + spacing / 2 + i * spacing, oy = -10;
+                const isSelected = mutableState.selectedCloth === def.id;
+                const btn = this.add.rectangle(ox, oy, btnW, 46, def.id === 'none' ? 0x34495e : def.color, 0.85).setStrokeStyle(isSelected ? 3 : 1, 0xFFD700, isSelected ? 1 : 0.35).setInteractive({ useHandCursor: true });
+                const lbl = this.add.text(ox, oy, def.label, { fontSize: '13px', fontStyle: 'bold', color: '#fff', stroke: '#000', strokeThickness: 2 }).setOrigin(0.5);
+                btns.push(btn);
+                panelItems.push(btn, lbl);
+                btn.on('pointerdown', () => {
+                    btns.forEach(b => b.setStrokeStyle(1, 0xFFD700, 0.35));
+                    btn.setStrokeStyle(3, 0xFFD700, 1);
+                    mutableState.selectedCloth = def.id;
+                    saveCosmetics(mutableState);
+                    notifyMainScene();
+                });
+            });
+        }
+
+        const doneBtn = this.add.rectangle(0, panelH / 2 - 36, 190, 42, 0x27ae60).setStrokeStyle(2, 0xffffff, 0.7).setInteractive({ useHandCursor: true });
+        const doneTxt = this.add.text(0, panelH / 2 - 36, '✓ Save & Menu', { fontSize: '16px', fontStyle: 'bold', color: '#ffffff' }).setOrigin(0.5);
+        panelItems.push(doneBtn, doneTxt);
+
+        let panel: Phaser.GameObjects.Container;
+        doneBtn.on('pointerdown', () => {
+            overlay.destroy();
+            panel.destroy();
             this.registry.events.off('changedata', this.refreshStatus, this);
             this.scene.stop('MainScene');
             this.scene.start('MenuScene');
         });
 
-        this.winPopup = this.add.container(cx, cy, [bg, title, resourceLine, feedback, btnBg, btnTxt]);
-        this.winPopup.setDepth(100);
-
-        this.winPopup.setAlpha(0);
-        this.tweens.add({ targets: this.winPopup, alpha: 1, duration: 400, ease: 'Power2' });
+        panel = this.add.container(cx, cy, panelItems).setDepth(201).setAlpha(0);
+        this.tweens.add({ targets: panel, alpha: 1, duration: 300, ease: 'Power2' });
     }
 
     private shutdown(): void {
