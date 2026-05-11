@@ -107,7 +107,9 @@ export class MainScene extends Phaser.Scene {
         this.load.spritesheet('puppy_run', 'assets/Splayer_strip4.png', { frameWidth: 64, frameHeight: 64 });
         this.load.spritesheet('squirrel_img', 'assets/squirrel.png', { frameWidth: 50, frameHeight: 45 });
         this.load.image('town_tiles', 'assets/tilemap_packed.png');
-        this.load.tilemapTiledJSON('map', 'assets/map.json');
+        const mapKey = `map${this.levelIndex}`;
+        if (this.cache.tilemap.exists(mapKey)) this.cache.tilemap.remove(mapKey);
+        this.load.tilemapTiledJSON(mapKey, `assets/map${this.levelIndex}.json`);
         this.load.image('heart', 'assets/heart.png');
         this.load.image('fire', 'assets/fire.png');
         
@@ -134,7 +136,7 @@ export class MainScene extends Phaser.Scene {
         this.createCloudTexture();
         
         // Setup tilemap background
-        const map = this.make.tilemap({ key: 'map' });
+        const map = this.make.tilemap({ key: `map${this.levelIndex}` });
         const tileset = map.addTilesetImage('town_tiles', 'town_tiles');
         if (tileset) {
             ['background', 'midground', 'foreground'].forEach(layer => map.createLayer(layer, tileset, 0, 0)?.setScale(2.5));
