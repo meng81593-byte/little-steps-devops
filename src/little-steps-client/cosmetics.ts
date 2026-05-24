@@ -80,7 +80,11 @@ export function loadCosmetics(): CosmeticsState {
 }
 
 export function saveCosmetics(state: CosmeticsState): void {
-    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {}
+    try { 
+        localStorage.setItem(KEY, JSON.stringify(state)); 
+    } catch (error) {
+        console.warn('⚠️ cannt save settings.', error);
+    }
 }
 
 export function unlockRewardForLevel(levelIndex: number): CosmeticsState {

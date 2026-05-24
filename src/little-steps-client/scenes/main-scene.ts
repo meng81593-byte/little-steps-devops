@@ -86,7 +86,7 @@ export class MainScene extends Phaser.Scene {
         // Tutorial step dialogues (levelIndex 0 only)
         this.tutorialDialogues.clear();
         if (this.levelIndex === 0) {
-            this.tutorialDialogues.set(1, 'You moved! 🐾\nNotice the HUD at the top — Time ⏰ and Stamina 💪 both decreased.\nEvery step has a cost. Plan your route wisely!');
+            this.tutorialDialogues.set(1, 'You moved! 🐾\nNotice the HUD at the top — Time and Stamina both decreased.\nEvery step has a cost. Plan your route wisely!');
             this.tutorialDialogues.set(2, 'You found a Bone! 🦴\nThe goal gate is locked — you need at least one bone before you can enter.\nHead back on track and reach the House!');
         }
 
@@ -227,7 +227,20 @@ export class MainScene extends Phaser.Scene {
             this.isTutorialActive = true;
             this.showDialogue(tutorials[this.levelIndex], () => { this.isTutorialActive = false; });
         }
+        }
+    private getTooltipText(node: GraphNode, isNeighbor: boolean): string {
+        if (node.type === NodeType.DEFENDER && !this.triggeredTraps.has(node.id)) {
+            return 'Defender Node:\nForces you to the highest cost path!';
+        }
+        if (node.nodeEffects?.some(e => e.resource === 'bones' && e.value > 0)) {
+            return 'Bone Node:\nCollect to increase score.';
+        }
+        if (this.levelIndex === 0 && isNeighbor) {
+            return 'Walkable Path:\nClick to move here.';
+        }
+        return '';
     }
+
 
     private showDialogue(text: string, onComplete: () => void): void {
         const { width, height } = this.scale;
