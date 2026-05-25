@@ -198,63 +198,17 @@ export function evaluatePerformance(
     final: ResourceVector,
 ): PerformanceFeedback {
     const won = final.time >= 0 && final.stamina >= 0 && final.bones >= 1;
-
-    if (!result.levelWinnable || !result.minBudget) {
-        return {
-            won, levelWinnable: false,
-            timeUsed: initial.time - final.time,
-            optimalTime: INF, timeSaved: 0,
-            message: 'This level is theoretically unwinnable — but you did it!',
-            rating: 'perfect',
-        };
-    }
-
     const timeUsed = initial.time - final.time;
-    const optimalTime = result.minBudget.time;
+    const optimalTime = result.minBudget?.time ?? INF;
 
-    // "Slack" = how much extra time the player started with beyond the minimum
-    // needed to guarantee a win against the worst-case defender.
-    // This is stable regardless of which path was actually taken or how the
-    // defender behaved — it purely reflects the quality of the route chosen
-    // relative to the theoretical optimum.
-    //
-    // Example: initial=100, minBudget=50 → slack=50 (could have started with
-    // 50 less time and still guaranteed a win on the optimal route).
-    // If the player walked the optimal route they used exactly 50 time and
-    // arrived with 50 left — slack = initial - minBudget = 50. Perfect.
-    const slack = initial.time - optimalTime;  // always >= 0 when level is winnable
-
-    // How much time the player has left compared to the worst-case minimum.
-    // final.time >= 0 is guaranteed (game prevents moves that go negative),
-    // but comparing final.time to (initial.time - optimalTime) tells us whether
-    // the player arrived with more or less surplus than the optimal route would give.
-    //
-    // Surplus on optimal route = initial.time - optimalTime (they arrive with exactly
-    // this much left if they play perfectly).
-    // Player surplus = final.time.
-    // Extra time wasted = (initial.time - optimalTime) - final.time
-    //                   = optimalTime - (initial.time - final.time - (initial.time - optimalTime))
-    // Simplified: wasted = (initial.time - optimalTime) - final.time
-    //                    = slack - final.time
-    // If wasted <= 0 the player did at least as well as optimal (on this run).
-    const wasted = slack - final.time;  // negative means player did better than expected
-
-    let message: string;
-    let rating: PerformanceFeedback['rating'];
-
-    if (wasted <= 0) {
-        // Player arrived with at least as much time left as the optimal route guarantees
-        message = 'Perfect route! Not a single time unit wasted 🐾';
-        rating = 'perfect';
-    } else if (wasted <= Math.max(1, optimalTime * 0.15)) {
-        message = `So close! You used ${wasted} extra time units`;
-        rating = 'good';
-    } else {
-        message = `Optimal route costs ${optimalTime} time — you spent ${wasted} extra`;
-        rating = 'ok';
+    if (final.time > 0 && final.stamina > 0) {
+        return { won, levelWinnable: result.levelWinnable, timeUsed, optimalTime, timeSaved: 0, message: 'Perfect route! Arrived with time and stamina to spare 🐾', rating: 'perfect' };
     }
 
-    return { won, levelWinnable: true, timeUsed, optimalTime, timeSaved: wasted, message, rating };
+    const depleted = final.time === 0 && final.stamina === 0
+        ? 'time and stamina'
+        : final.time === 0 ? 'time' : 'stamina';
+    return { won, levelWinnable: result.levelWinnable, timeUsed, optimalTime, timeSaved: 0, message: `Made it home, but ${depleted} ran out! Try a more efficient route 💪`, rating: 'ok' };
 }
 
 

@@ -25,6 +25,7 @@ export type EdgeData = {
     targetId: number;
     effects?: ResourceEffect[];
     pathNodes?: PathPoint[];
+    labelOffset?: { x: number; y: number };
 };
 
 export type GraphNode = {
@@ -34,6 +35,7 @@ export type GraphNode = {
     type: NodeType;
     neighbors: EdgeData[];
     nodeEffects?: ResourceEffect[];
+    nodeLabelOffset?: { x: number; y: number };
 };
 
 export type LevelData = {

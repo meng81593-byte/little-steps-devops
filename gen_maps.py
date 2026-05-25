@@ -1,8 +1,30 @@
 import json, os, copy
 
+# ── Coordinate system ──────────────────────────────────────────────────────────
+# The tile map is W×H = 25×18 tiles.
+# Each tile is SCALE=40 pixels wide/tall on screen.
+#
+# Conversion:  tile_col = round(pixel_x / 40)
+#              tile_row = round(pixel_y / 40)
+#
+# Node positions (x, y) in the level .ts files ARE the pixel coordinates.
+# They must match the (px, py) values in the nodes lists below — that is
+# how the tile-map node blocks line up with the Phaser node circles.
+#
+# To move a node:
+#   1. Change (x, y) in the level .ts file.
+#   2. Change the matching (px, py) in the nodes list below.
+#   3. Update every edge in the edges list that referenced the old coords.
+#   4. Run `python gen_maps.py` to regenerate the .json map files.
+#
+# To add a new node:
+#   1. Add it to the level .ts file with the desired (x, y).
+#   2. Append (x, y) to the nodes list below.
+#   3. Append edges to the edges list using the same pixel coords.
+
 W, H = 25, 18
 ASSETS = "src/little-steps-client/assets"
-SCALE  = 40          # tile size on screen = 16px × 2.5x Phaser scale
+SCALE  = 40          # 1 tile = 40 px on screen (16 px sprite × 2.5 Phaser scale)
 
 # Tile IDs — swap these if they look wrong in-game
 TILE_PATH = 44       # gray stone slab  → 石板路
@@ -79,7 +101,9 @@ def deco(bg, pts):
 # ── Graph → tile helpers ───────────────────────────────────────────────────────
 
 def tc(px, py):
-    """Pixel coords → (col, row) tile coords."""
+    """Pixel coords → (col, row) tile coords.
+    Formula: col = round(px / 40),  row = round(py / 40)
+    Example: pixel (480, 250) → tile col 12, row 6"""
     return round(px / SCALE), round(py / SCALE)
 
 def draw_path(mid, px0, py0, px1, py1):
@@ -96,12 +120,18 @@ def draw_path(mid, px0, py0, px1, py1):
         s(mid, r, c, TILE_PATH)
 
 def draw_node(mid, px, py):
-    """2×2 platform at node position (mirrors level 1 style: 13/15 top, 37/39 bottom)."""
+    """2×2 dirt-block platform centered at the node pixel position.
+    The center of the block is at tile (col, row) = tc(px, py).
+    Tiles placed:
+      top-left    (row-1, col-1) = 13
+      top-right   (row-1, col  ) = 15
+      bottom-left (row,   col-1) = 37
+      bottom-right(row,   col  ) = 39  ← this is the exact node position"""
     c, r = tc(px, py)
-    s(mid, r-1, c-1, 13)   # top-left
-    s(mid, r-1, c,   15)   # top-right
-    s(mid, r,   c-1, 37)   # bottom-left
-    s(mid, r,   c,   39)   # bottom-right = node position
+    s(mid, r-1, c-1, 13)
+    s(mid, r-1, c,   15)
+    s(mid, r,   c-1, 37)
+    s(mid, r,   c,   39)
 
 def paint_graph(mid, nodes_px, edges_px):
     """Draw edges first (paths), then nodes on top (dirt blocks)."""
@@ -111,25 +141,28 @@ def paint_graph(mid, nodes_px, edges_px):
         draw_node(mid, *p)
 
 # ── MAP 0: Tutorial ────────────────────────────────────────────────────────────
-# Node positions from level0.ts
+# Node positions must match (x, y) in level0.ts exactly.
+# Tile position = (round(x/40), round(y/40)) = (col, row)
 nodes0 = [
-    (100, 400),   # 0 START
-    (300, 400),   # 1
-    (480, 250),   # 2 bone
-    (480, 540),   # 3 DEFENDER
-    (660, 360),   # 4
-    (660, 530),   # 5
-    (830, 420),   # 6 GOAL
+    (100, 400),   # node 0 — START         → tile col 2,  row 10
+    (300, 400),   # node 1 — crossroads    → tile col 8,  row 10
+    (480, 250),   # node 2 — BONE          → tile col 12, row 6
+    (480, 540),   # node 3 — SQUIRREL      → tile col 12, row 14
+    (660, 360),   # node 4 — upper exit    → tile col 17, row 9
+    (660, 530),   # node 5 — lower exit    → tile col 17, row 13
+    (830, 420),   # node 6 — GOAL          → tile col 21, row 11
 ]
+# Each edge is ((px_from, py_from), (px_to, py_to)).
+# Both coords must appear in nodes0 above (or be intermediate waypoints).
 edges0 = [
-    ((100,400),(300,400)),
-    ((300,400),(480,250)),
-    ((300,400),(480,540)),
-    ((480,250),(660,360)),
-    ((480,540),(660,360)),
-    ((480,540),(660,530)),
-    ((660,360),(830,420)),
-    ((660,530),(830,420)),
+    ((100,400),(300,400)),   # 0 → 1
+    ((300,400),(480,250)),   # 1 → 2 (upper fork)
+    ((300,400),(480,540)),   # 1 → 3 (lower fork)
+    ((480,250),(660,360)),   # 2 → 4
+    ((480,540),(660,360)),   # 3 → 4
+    ((480,540),(660,530)),   # 3 → 5
+    ((660,360),(830,420)),   # 4 → 6 GOAL
+    ((660,530),(830,420)),   # 5 → 6 GOAL
 ]
 
 bg0 = grid(1)
@@ -152,51 +185,55 @@ fg0 = grid(0)
 shrooms(fg0, [(8,7),(11,15),(13,3),(14,21),(16,9)])
 
 # ── MAP 1: Level 1 — original map.json ────────────────────────────────────────
+# Level 1 uses a hand-authored map (map.json) as-is.
+# Node and path layout are baked into that file; to change them edit map.json
+# directly in Tiled and export, or replace this with a generated map like map0.
 map1 = copy.deepcopy(_template)
 map1["editorsettings"]["export"]["target"] = "map1.tmj"
 
 # ── MAP 2: Level 2 ────────────────────────────────────────────────────────────
-# Node positions from level2.ts
+# Node positions must match (x, y) in level2.ts exactly.
+# Tile position = (round(x/40), round(y/40)) = (col, row)
 nodes2 = [
-    (80,  370),   # 0 START
-    (220, 200),   # 1
-    (220, 370),   # 2
-    (220, 530),   # 3
-    (390, 205),   # 4 bone
-    (390, 310),   # 5
-    (510, 370),   # 6 DEFENDER
-    (360, 540),   # 7 stamina
-    (430, 460),   # 8
-    (630, 200),   # 9
-    (630, 370),   # 10
-    (630, 490),   # 11
-    (770, 220),   # 12
-    (770, 430),   # 13 bone
-    (900, 320),   # 14 GOAL
+    (80,  370),   # node 0  — START           → tile col 2,  row 9
+    (220, 200),   # node 1  — upper fork      → tile col 6,  row 5
+    (220, 370),   # node 2  — middle fork     → tile col 6,  row 9
+    (220, 530),   # node 3  — lower fork      → tile col 6,  row 13
+    (390, 205),   # node 4  — BONE            → tile col 10, row 5
+    (390, 310),   # node 5  — middle junction → tile col 10, row 8
+    (510, 370),   # node 6  — SQUIRREL        → tile col 13, row 9
+    (360, 540),   # node 7  — STAMINA BOOST   → tile col 9,  row 14
+    (430, 460),   # node 8  — lower junction  → tile col 11, row 12
+    (630, 200),   # node 9  — upper right     → tile col 16, row 5
+    (630, 370),   # node 10 — center right    → tile col 16, row 9
+    (630, 490),   # node 11 — lower right     → tile col 16, row 12
+    (770, 220),   # node 12 — upper goal path → tile col 19, row 6
+    (770, 430),   # node 13 — BONE            → tile col 19, row 11
+    (900, 320),   # node 14 — GOAL            → tile col 23, row 8
 ]
 edges2 = [
-    ((80,370),(220,200)),
-    ((80,370),(220,370)),
-    ((80,370),(220,530)),
-    ((220,200),(390,205)),
-    ((220,200),(390,310)),
-    ((220,370),(390,310)),
-    ((220,370),(510,370)),
-    ((220,530),(360,540)),
-    ((220,530),(430,460)),
-    ((390,205),(630,200)),
-    ((390,310),(510,370)),
-    ((390,310),(630,200)),
-    ((360,540),(630,490)),
-    ((430,460),(510,370)),
-    ((430,460),(630,490)),
-    ((510,370),(630,370)),
-    ((630,200),(770,220)),
-    ((630,200),(630,370)),
-    ((630,370),(770,430)),
-    ((630,490),(770,430)),
-    ((770,220),(900,320)),
-    ((770,430),(900,320)),
+    ((80,370),(220,200)),    # 0 → 1
+    ((80,370),(220,370)),    # 0 → 2
+    ((80,370),(220,530)),    # 0 → 3
+    ((220,200),(390,205)),   # 1 → 4
+    ((220,200),(390,310)),   # 1 → 5
+    ((220,370),(390,310)),   # 2 → 5
+    ((220,370),(510,370)),   # 2 → 6 (SQUIRREL)
+    ((220,530),(360,540)),   # 3 → 7
+    ((220,530),(430,460)),   # 3 → 8
+    ((390,205),(630,200)),   # 4 → 9
+    ((390,310),(510,370)),   # 5 → 6 (SQUIRREL)
+    ((390,310),(630,200)),   # 5 → 9
+    ((360,540),(630,490)),   # 7 → 11
+    ((430,460),(510,370)),   # 8 → 6 (SQUIRREL)
+    ((430,460),(630,490)),   # 8 → 11
+    ((510,370),(630,370)),   # 6 → 10 (squirrel's forced exit)
+    ((630,200),(770,220)),   # 9 → 12
+    ((630,200),(630,370)),   # 9 → 10
+    ((630,370),(770,430)),   # 10 → 13
+    ((630,490),(770,430)),   # 11 → 13
+    ((770,220),(900,320)),   # 12 → 14 GOAL
+    ((770,430),(900,320)),   # 13 → 14 GOAL
 ]
 
 bg2 = grid(1)
@@ -227,30 +264,31 @@ fg2 = grid(0)
 shrooms(fg2, [(5,4),(7,7),(9,10),(12,22),(13,17),(15,5),(7,14)])
 
 # ── MAP 3: Level 3 ────────────────────────────────────────────────────────────
-# Node positions from level3.ts
+# Node positions must match (x, y) in level3.ts exactly.
+# Tile position = (round(x/40), round(y/40)) = (col, row)
 nodes3 = [
-    (100, 400),   # 1 START
-    (250, 400),   # 2
-    (250, 240),   # 3 stamina
-    (450, 520),   # 4
-    (450, 240),   # 5 bone
-    (600, 380),   # 6
-    (600, 520),   # 7 cat start
-    (750, 380),   # 8
-    (820, 280),   # 9 GOAL
+    (100, 400),   # node 1 — START          → tile col 3,  row 10
+    (250, 400),   # node 2 — first split    → tile col 6,  row 10
+    (250, 240),   # node 3 — STAMINA BOOST  → tile col 6,  row 6
+    (450, 520),   # node 4 — risky path     → tile col 11, row 13
+    (450, 240),   # node 5 — BONE           → tile col 11, row 6
+    (600, 380),   # node 6 — junction       → tile col 15, row 10
+    (600, 520),   # node 7 — CAT START      → tile col 15, row 13
+    (750, 380),   # node 8 — safe node      → tile col 19, row 10
+    (820, 280),   # node 9 — GOAL           → tile col 21, row 7
 ]
 edges3 = [
-    ((100,400),(250,400)),
-    ((250,400),(250,240)),
-    ((250,400),(450,520)),
-    ((250,240),(450,240)),
-    ((450,240),(600,380)),
-    ((450,520),(600,380)),
-    ((450,520),(600,520)),
-    ((600,380),(600,520)),
-    ((600,380),(750,380)),
-    ((600,520),(750,380)),
-    ((750,380),(820,280)),
+    ((100,400),(250,400)),   # 1 → 2
+    ((250,400),(250,240)),   # 2 → 3 (upper, toward stamina)
+    ((250,400),(450,520)),   # 2 → 4 (lower, risky)
+    ((250,240),(450,240)),   # 3 → 5 (bone)
+    ((450,240),(600,380)),   # 5 → 6
+    ((450,520),(600,380)),   # 4 → 6
+    ((450,520),(600,520)),   # 4 → 7 (cat territory)
+    ((600,380),(600,520)),   # 6 ↔ 7 (junction meets cat)
+    ((600,380),(750,380)),   # 6 → 8
+    ((600,520),(750,380)),   # 7 → 8
+    ((750,380),(820,280)),   # 8 → 9 GOAL
 ]
 
 bg3 = grid(1)

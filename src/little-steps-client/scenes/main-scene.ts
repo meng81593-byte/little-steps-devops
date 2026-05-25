@@ -436,15 +436,6 @@ export class MainScene extends Phaser.Scene {
         
         const nextResources = applyEffects(this.currentResources, edge.effects, this.level.maxResources);
         if (nextResources.time < 0 || nextResources.stamina < 0) return this.triggerDefeat(nextResources.time < 0 ? 'time' : 'stamina');
-        if (targetNodeId === this.level.goalNodeId && nextResources.bones < 1) {
-            this.cameras.main.shake(200, 0.01);
-            const gn = this.graph.find(n => n.id === targetNodeId)!;
-            const msg = this.add.text(gn.x, gn.y - 50, '🦴 Need a bone first!', {
-                fontSize: '18px', fontStyle: 'bold', color: '#FFD700', stroke: '#000000', strokeThickness: 4
-            }).setOrigin(0.5).setDepth(200);
-            this.tweens.add({ targets: msg, y: msg.y - 40, alpha: 0, duration: 1500, ease: 'Power1', onComplete: () => msg.destroy() });
-            return;
-        }
 
         this.activeHints.forEach(h => h?.destroy());
         this.activeHints = [];
@@ -525,7 +516,7 @@ export class MainScene extends Phaser.Scene {
         if (this.isFogOfWar) this.revealEdgesFrom(targetNodeId, true);
         this.isMoving = false;
 
-        if (this.currentNodeId === this.level.goalNodeId) {
+        if (this.currentNodeId === this.level.goalNodeId && this.currentResources.bones >= 1) {
             this.registry.set('finalResources', { ...this.currentResources });
             this.registry.set('goalReached', true);
             this.highlightPossibleMoves();
@@ -666,15 +657,18 @@ export class MainScene extends Phaser.Scene {
             node.neighbors.forEach(e => {
                 const neighbor = this.graph.find(n => n.id === e.targetId)!;
                 const angle = Phaser.Math.Angle.Between(node.x, node.y, neighbor.x, neighbor.y);
-                const startX = node.x + Math.cos(angle - Math.PI / 2) * 12, startY = node.y + Math.sin(angle - Math.PI / 2) * 12;
-                const endX = neighbor.x + Math.cos(angle - Math.PI / 2) * 12, endY = neighbor.y + Math.sin(angle - Math.PI / 2) * 12;
-                
+                const px = Math.cos(angle - Math.PI / 2), py = Math.sin(angle - Math.PI / 2);
+                const startX = node.x + px * 12, startY = node.y + py * 12;
+                const endX = neighbor.x + px * 12, endY = neighbor.y + py * 12;
+
                 this.edgeGraphicsMap.set(`${node.id}-${e.targetId}`, this.add.graphics().lineStyle(4, 0x87a1ff, 0.6).beginPath().moveTo(startX, startY).lineTo(endX, endY));
-                
+
                 const uKey = `${Math.min(node.id, e.targetId)}-${Math.max(node.id, e.targetId)}`;
                 if (!rendered.has(uKey)) {
                     rendered.add(uKey);
-                    const ui = this.createEffectBars(startX + (endX - startX) * 0.5, startY + (endY - startY) * 0.5, e.effects);
+                    const lx = (node.x + neighbor.x) / 2 + px * 24 + (e.labelOffset?.x ?? 0);
+                    const ly = (node.y + neighbor.y) / 2 + py * 24 + (e.labelOffset?.y ?? 0);
+                    const ui = this.createEffectBars(lx, ly, e.effects);
                     if (ui) { ui.setAlpha(0); this.edgeTextsMap.set(`${node.id}-${e.targetId}`, ui); this.edgeTextsMap.set(`${e.targetId}-${node.id}`, ui); }
                 }
             });
@@ -711,7 +705,7 @@ export class MainScene extends Phaser.Scene {
 
             obj.on('pointerout', () => { if (!this.isTutorialActive) { this.registry.set('preview', null); this.tooltipContainer.setAlpha(0); toggleTrap(1, 0.2); }});
             obj.on('pointerdown', () => { if (!this.isTutorialActive && !(this.isFogOfWar && !this.revealedNodes.has(node.id))) this.moveToNextNode(node.id); });
-            if (node.nodeEffects?.length) this.nodeEffectTextsMap.set(node.id, this.createEffectBars(node.x, node.y - 36, node.nodeEffects)!);
+            if (node.nodeEffects?.length) this.nodeEffectTextsMap.set(node.id, this.createEffectBars(node.x + (node.nodeLabelOffset?.x ?? 0), node.y - 18 + (node.nodeLabelOffset?.y ?? 0), node.nodeEffects)!);
         });
     }
 
@@ -725,33 +719,36 @@ export class MainScene extends Phaser.Scene {
             this.edgeTextsMap.get(`${cur.id}-${edge.targetId}`)?.setAlpha(1);
         });;
         
-        if (cur.type === NodeType.DEFENDER && !this.triggeredTraps.has(cur.id)) {
+        if (cur.type === NodeType.DEFENDER) {
             const alert = this.add.text(this.puppy.x, this.puppy.y - 40, '❗', { fontSize: '24px', fontStyle: 'bold' }).setOrigin(0.5).setDepth(30);
             const sq = this.add.sprite(cur.x + 50, cur.y, 'squirrel_img').setOrigin(0.5, 0.9).setDepth(9).setScale(2).setFlipX(true);
             this.safePlay(sq, 'squirrel_idle');
 
-            const squirrelMsg = this.levelIndex === 0
+            const squirrelMsg = this.levelIndex === 0 && !this.triggeredTraps.has(cur.id)
                 ? 'A Squirrel Node! 🐿️\nThe squirrel blocks your free choice and forces you onto the HARDEST path — maximum Time and Stamina cost.\nWatch out for squirrels!'
                 : 'Oh look! A playful squirrel dashed out from the bushes!';
             this.showDialogue(squirrelMsg, () => {
                 alert.destroy();
                 if (this.isMoving || this.isGameOver) return sq.destroy();
 
-                const calcBackprop = (edge: typeof cur.neighbors[0]) => {
+                const calcEdgeCost = (edge: typeof cur.neighbors[0]) => {
                     const dt = edge.effects?.filter(e => e.op === 'add' && e.resource === 'time').reduce((s, e) => s + e.value, 0) ?? 0;
                     const ds = edge.effects?.filter(e => e.op === 'add' && e.resource === 'stamina').reduce((s, e) => s + e.value, 0) ?? 0;
-                    const b = this.energyGameResult?.nodeWinBudgets.get(edge.targetId);
-                    return { time: b ? Math.max(0, b.time - dt) : 0, stamina: b ? Math.max(0, b.stamina - ds) : 0 };
+                    return { time: -dt, stamina: -ds };
                 };
-                const nextId = cur.neighbors.length ? [...cur.neighbors].sort((a, b) => {
-                    const ca = calcBackprop(a), cb = calcBackprop(b);
-                    return cb.time !== ca.time ? cb.time - ca.time : cb.stamina - ca.stamina;
-                })[0].targetId : null;
+                const costs = cur.neighbors.map(e => ({ edge: e, cost: calcEdgeCost(e) }));
+                const maxTime = Math.max(...costs.map(c => c.cost.time));
+                const topTime = costs.filter(c => c.cost.time === maxTime);
+                const maxStamina = Math.max(...topTime.map(c => c.cost.stamina));
+                const candidates = topTime.filter(c => c.cost.stamina === maxStamina);
+                const nextId = candidates.length ? candidates[Math.floor(Math.random() * candidates.length)].edge.targetId : null;
                 
                 if (nextId !== null) {
-                    this.triggeredTraps.add(cur.id);
-                    const trap = this.nodeGraphicsMap.get(cur.id) as Phaser.GameObjects.Container;
-                    if (trap?.list) trap.getData('spikeTween')?.stop() || this.tweens.add({ targets: trap.list, alpha: 0.2, duration: 400 });
+                    if (this.levelIndex === 0) {
+                        this.triggeredTraps.add(cur.id);
+                        const trap = this.nodeGraphicsMap.get(cur.id) as Phaser.GameObjects.Container;
+                        if (trap?.list) trap.getData('spikeTween')?.stop() || this.tweens.add({ targets: trap.list, alpha: 0.2, duration: 400 });
+                    }
 
                     const edge = cur.neighbors.find(e => e.targetId === nextId)!;
                     const path = edge.pathNodes?.length ? edge.pathNodes : [{ x: this.graph.find(n=>n.id===nextId)!.x, y: this.graph.find(n=>n.id===nextId)!.y }];
