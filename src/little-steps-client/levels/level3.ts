@@ -6,7 +6,7 @@ export const level3: LevelData = {
     startNodeId: 1,
     goalNodeId: 9,
     catStartNodeId: 7,
-    initialResources: { time: 100, stamina: 50, bones: 0 }, // Scaled to match Level 1
+    initialResources: { time: 90, stamina: 45, bones: 0 },
     maxResources: { time: 100, stamina: 100, bones: 1 },
     nodes: [
         // --- Core starting path ---

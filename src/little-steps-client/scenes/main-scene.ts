@@ -217,20 +217,24 @@ export class MainScene extends Phaser.Scene {
 
         // Tutorial Dialogues
         const tutorials = [
-            'Welcome to the Tutorial! 🐾\nGuide the puppy to the House 🏠.\nClick the glowing node to take your first step!',
-            'Welcome! Guide the puppy to the House node.\nEvery move consumes Time (T) and Stamina (S).',
-            'The path ahead is hidden in the fog!\nNew nodes will only reveal themselves as you explore.',
+            'Glowing particles mark where you can move.\nClick a highlighted node to take your first step! 🐾',
+            'Every move costs Time and Stamina — plan your route carefully!',
+            'The map is covered in fog!\nNew paths reveal themselves as you explore.',
             'Watch out! A mischievous cat is on the prowl.\nKeep moving and do not let it catch you!'
         ];
 
-        if (tutorials[this.levelIndex]) {
-            this.isTutorialActive = true;
-            this.showDialogue(tutorials[this.levelIndex], () => { this.isTutorialActive = false; });
-        }
+        this.isTutorialActive = true;
+        this.showLevelIntro(() => {
+            if (tutorials[this.levelIndex]) {
+                this.showDialogue(tutorials[this.levelIndex], () => { this.isTutorialActive = false; });
+            } else {
+                this.isTutorialActive = false;
+            }
+        });
         }
     private getTooltipText(node: GraphNode, isNeighbor: boolean): string {
         if (node.type === NodeType.DEFENDER && !this.triggeredTraps.has(node.id)) {
-            return 'Defender Node:\nForces you to the highest cost path!';
+            return '🐿️ Squirrel Node:\nThe squirrel picks the hardest path for you!';
         }
         if (node.nodeEffects?.some(e => e.resource === 'bones' && e.value > 0)) {
             return 'Bone Node:\nCollect to increase score.';
@@ -245,18 +249,26 @@ export class MainScene extends Phaser.Scene {
     private showDialogue(text: string, onComplete: () => void): void {
         const { width, height } = this.scale;
         const blocker = this.add.rectangle(0, 0, width, height, 0x000000, 0).setOrigin(0).setDepth(3000).setInteractive({ useHandCursor: true });
-        const container = this.add.container(width / 2, height + 100).setDepth(3001);
-        const bg = this.add.rectangle(0, 0, width * 0.8, 90, 0x000000, 0.8).setStrokeStyle(4, 0xffffff, 1);
-        const msg = this.add.text(0, 0, text, { fontSize: '22px', color: '#ffffff', fontStyle: 'bold', wordWrap: { width: width * 0.8 - 40 } }).setOrigin(0.5);
-        const ind = this.add.text(width * 0.4 - 20, 25, '▼', { fontSize: '16px', color: '#ffffff' }).setOrigin(0.5);
-        
-        this.tweens.add({ targets: ind, y: ind.y + 5, duration: 400, yoyo: true, repeat: -1 });
-        container.add([bg, msg, ind]);
+        const container = this.add.container(width / 2, height + 200).setDepth(3001);
 
-        this.tweens.add({ targets: container, y: height - 65, duration: 400, ease: 'Back.easeOut', onComplete: () => {
+        const msg = this.add.text(0, 0, text, { fontSize: '22px', color: '#ffffff', fontStyle: 'bold', wordWrap: { width: width * 0.8 - 40 } }).setOrigin(0.5);
+        const hint = this.add.text(0, 0, 'tap anywhere to continue', { fontSize: '13px', color: '#aaaaaa' }).setOrigin(0.5);
+
+        const gap = 10;
+        const totalH = msg.height + gap + hint.height;
+        const pad = 20;
+        const bgH = totalH + pad * 2;
+
+        msg.setY(-hint.height / 2 - gap / 2);
+        hint.setY(msg.y + msg.height / 2 + gap + hint.height / 2);
+
+        const bg = this.add.rectangle(0, 0, width * 0.8, bgH, 0x000000, 0.8).setStrokeStyle(4, 0xffffff, 1);
+        container.add([bg, msg, hint]);
+
+        this.tweens.add({ targets: container, y: height - bgH / 2 - 10, duration: 400, ease: 'Back.easeOut', onComplete: () => {
             blocker.once('pointerdown', () => {
                 blocker.destroy();
-                this.tweens.add({ targets: container, y: height + 100, alpha: 0, duration: 300, ease: 'Power2', onComplete: () => { container.destroy(); onComplete(); }});
+                this.tweens.add({ targets: container, y: height + 200, alpha: 0, duration: 300, ease: 'Power2', onComplete: () => { container.destroy(); onComplete(); }});
             });
         }});
     }
@@ -362,8 +374,10 @@ export class MainScene extends Phaser.Scene {
 
     private revealEdgesFrom(nodeId: number, animate: boolean): void {
         this.graph.find(n => n.id === nodeId)?.neighbors.forEach(edge => {
-            const targets = [this.edgeGraphicsMap.get(`${nodeId}-${edge.targetId}`), this.edgeTextsMap.get(`${nodeId}-${edge.targetId}`)].filter(Boolean) as any[];
-            if (targets.length && targets[0].alpha === 0) animate ? this.tweens.add({ targets, alpha: 1, duration: 600 }) : targets.forEach(t => t.setAlpha(1));
+            const graphic = this.edgeGraphicsMap.get(`${nodeId}-${edge.targetId}`);
+            if (graphic && (graphic as any).alpha === 0) {
+                animate ? this.tweens.add({ targets: graphic, alpha: 1, duration: 600 }) : (graphic as any).setAlpha(1);
+            }
             this.revealNode(edge.targetId, animate);
         });
     }
@@ -391,50 +405,25 @@ export class MainScene extends Phaser.Scene {
             } else {
                 const isTime = eff.resource === 'time';
                 const textureKey = isTime ? 'heart' : 'fire';
+                const numColor = isTime ? '#f1c40f' : '#2ecc71';
                 const isCost = eff.value < 0;
                 const absVal = Math.abs(eff.value);
 
-                const targetWidth = 12; 
-                const spacing = targetWidth + 2;
-                const numIcons = Math.ceil(absVal / 10);
-                const iconsWidth = numIcons * spacing;
-                const textWidth = 20; 
-                const totalWidth = iconsWidth + textWidth;
+                const iconWidth = 14;
+                const frame = this.textures.getFrame(textureKey);
+                const scale = iconWidth / (frame ? frame.width : 20);
+                const textStr = `${isCost ? '-' : '+'}${absVal}`;
+                const totalWidth = iconWidth + 22;
                 const startX = -totalWidth / 2;
 
                 g.fillStyle(0x1a252f, 0.8).fillRoundedRect(startX - 4, oy - 8, totalWidth + 8, 16, 4);
 
-                const frame = this.textures.getFrame(textureKey);
-                const origW = frame ? frame.width : 20;
-                const origH = frame ? frame.height : 20;
-                const scale = targetWidth / origW;
-
-                for (let j = 0; j < numIcons; j++) {
-                    const pointsInSlot = Math.min(absVal - j * 10, 10);
-                    const iconX = startX + j * spacing;
-
-                    const img = this.add.image(iconX, oy, textureKey)
-                        .setOrigin(0, 0.5)
-                        .setScale(scale);
-
-                    if (isCost) {
-                        // Use setTintFill to force the entire icon to be green, ignoring original colors
-                        img.setTintFill(0x00ff00); 
-                    }
-
-                    if (pointsInSlot < 10) {
-                        img.setCrop(0, 0, origW * (pointsInSlot / 10), origH);
-                    }
-
-                    container.add(img);
-                }
-
-                const textStr = `${isCost ? '-' : '+'}${absVal}`;
-                container.add(
-                    this.add.text(startX + iconsWidth, oy, textStr, {
-                        fontSize: '11px', fontStyle: 'bold', color: '#fff', stroke: '#000', strokeThickness: 2
+                container.add([
+                    this.add.image(startX, oy, textureKey).setOrigin(0, 0.5).setScale(scale),
+                    this.add.text(startX + iconWidth + 2, oy, textStr, {
+                        fontSize: '11px', fontStyle: 'bold', color: numColor, stroke: '#000', strokeThickness: 2
                     }).setOrigin(0, 0.5)
-                );
+                ]);
             }
         });
         return container;
@@ -592,17 +581,83 @@ export class MainScene extends Phaser.Scene {
         else if (reason === 'time') this.tweens.add({ targets: this.puppy, angle: 90, duration: 500, ease: 'Bounce.easeOut' });
         else if (reason === 'stamina') this.puppy.setTint(0x88aaff);
         
-        this.time.delayedCall(1500, () => this.showPopup('Defeat', `Out of ${reason === 'cat' ? 'luck! Caught by cat' : reason}!`, 'Try Again', () => { this.scene.stop('HudScene'); this.scene.restart(); }, false));
+        this.time.delayedCall(1500, () => this.showDefeatScreen(reason));
     }
 
-    private showPopup(t: string, m: string, btn: string, cb: () => void, w: boolean): void {
+    private showDefeatScreen(reason: 'time' | 'stamina' | 'cat'): void {
         const { width: W, height: H } = this.scale;
-        this.add.rectangle(0, 0, W, H, 0x000, 0.7).setOrigin(0).setDepth(100).setInteractive();
-        this.add.rectangle(W / 2, H / 2, 400, 250, w ? 0x27ae60 : 0xc0392b).setOrigin(0.5).setDepth(101).setStrokeStyle(4, 0xfff);
-        this.add.text(W / 2, H / 2 - 70, t, { fontSize: '32px', color: '#fff', fontStyle: 'bold' }).setOrigin(0.5).setDepth(102);
-        this.add.text(W / 2, H / 2 - 10, m, { fontSize: '18px', color: '#f6f8ff', align: 'center', wordWrap: { width: 360 } }).setOrigin(0.5).setDepth(102);
-        const btnBg = this.add.rectangle(W / 2, H / 2 + 70, 200, 50, 0xfff).setOrigin(0.5).setDepth(102).setInteractive({ useHandCursor: true }).on('pointerdown', cb);
-        this.add.text(W / 2, H / 2 + 70, btn, { fontSize: '20px', color: w ? '#27ae60' : '#c0392b', fontStyle: 'bold' }).setOrigin(0.5).setDepth(103);
+        const cx = W / 2, cy = H / 2;
+        this.add.rectangle(0, 0, W, H, 0x0a0010, 0.82).setOrigin(0).setDepth(100).setInteractive();
+        const cardW = Math.min(460, W * 0.85);
+        const cardH = 290;
+        const r = 20;
+        const info = {
+            time:    { header: '⏰ Time Ran Out!',       body: 'You spent too many time units.\nTry a more direct route next time!',  border: 0xc0392b, icon: '⏰' },
+            stamina: { header: '🔥 Stamina Depleted!',   body: 'You exhausted all your stamina.\nLook for cheaper paths!',            border: 0x8e44ad, icon: '🔥' },
+            cat:     { header: '😿 Caught by the Cat!', body: 'The cat intercepted you!\nMove faster or find a safer route.',        border: 0xd35400, icon: '😿' }
+        }[reason];
+        const mb = this.energyGameResult?.minBudget;
+        const optLine = mb
+            ? `Optimal route: ⏰ ${mb.time} time  🔥 ${mb.stamina} stamina\n(You started with ⏰ ${this.level.initialResources.time}  🔥 ${this.level.initialResources.stamina})`
+            : '';
+        const items: Phaser.GameObjects.GameObject[] = [];
+        const bg = this.add.graphics();
+        bg.fillStyle(0x1e1230, 0.97);
+        bg.fillRoundedRect(-cardW / 2, -cardH / 2, cardW, cardH, r);
+        bg.lineStyle(3, info.border, 1);
+        bg.strokeRoundedRect(-cardW / 2, -cardH / 2, cardW, cardH, r);
+        items.push(bg);
+        const headerBand = this.add.graphics();
+        headerBand.fillStyle(info.border, 0.2);
+        headerBand.fillRoundedRect(-cardW / 2, -cardH / 2, cardW, 52, { tl: r, tr: r, bl: 0, br: 0 });
+        items.push(headerBand);
+        items.push(this.add.text(-cardW / 2 + 12, -cardH / 2 + 8, info.icon, { fontSize: '22px' }));
+        items.push(this.add.text(cardW / 2 - 38, -cardH / 2 + 8, info.icon, { fontSize: '22px' }));
+        items.push(this.add.text(0, -cardH / 2 + 26, info.header, { fontSize: '24px', fontStyle: 'bold', color: '#fff8e7', align: 'center', stroke: '#000', strokeThickness: 2 }).setOrigin(0.5));
+        items.push(this.add.text(0, -cardH / 2 + 100, info.body, { fontSize: '15px', color: '#d5c5a0', align: 'center', wordWrap: { width: cardW - 40 } }).setOrigin(0.5));
+        if (optLine) items.push(this.add.text(0, -cardH / 2 + 162, optLine, { fontSize: '14px', color: '#ffaa44', align: 'center', wordWrap: { width: cardW - 40 } }).setOrigin(0.5));
+        const tryBg = this.add.rectangle(-75, cardH / 2 - 44, 130, 42, 0x27ae60).setStrokeStyle(2, 0xffffff, 0.7).setInteractive({ useHandCursor: true });
+        items.push(tryBg, this.add.text(-75, cardH / 2 - 44, 'Try Again', { fontSize: '17px', fontStyle: 'bold', color: '#fff' }).setOrigin(0.5));
+        const menuBg = this.add.rectangle(85, cardH / 2 - 44, 130, 42, 0x4a3555).setStrokeStyle(2, 0xffffff, 0.4).setInteractive({ useHandCursor: true });
+        items.push(menuBg, this.add.text(85, cardH / 2 - 44, '🏠 Menu', { fontSize: '16px', color: '#d5c5a0' }).setOrigin(0.5));
+        const popup = this.add.container(cx, cy, items).setDepth(101).setAlpha(0);
+        this.tweens.add({ targets: popup, alpha: 1, duration: 400, ease: 'Back.easeOut' });
+        tryBg.once('pointerdown', () => { this.scene.stop('HudScene'); this.scene.restart(); });
+        menuBg.once('pointerdown', () => { this.scene.stop('HudScene'); this.scene.start('MenuScene'); });
+    }
+
+    private showLevelIntro(onStart: () => void): void {
+        const { width: W, height: H } = this.scale;
+        const cx = W / 2, cy = H / 2;
+        const overlay = this.add.rectangle(0, 0, W, H, 0x0a0010, 0.82).setOrigin(0).setDepth(3000).setInteractive();
+        const cardW = Math.min(460, W * 0.85);
+        const cardH = 280;
+        const r = 20;
+        const items: Phaser.GameObjects.GameObject[] = [];
+        const bg = this.add.graphics();
+        bg.fillStyle(0x1e1230, 0.97);
+        bg.fillRoundedRect(-cardW / 2, -cardH / 2, cardW, cardH, r);
+        bg.lineStyle(3, 0xffd700, 1);
+        bg.strokeRoundedRect(-cardW / 2, -cardH / 2, cardW, cardH, r);
+        items.push(bg);
+        const headerBand = this.add.graphics();
+        headerBand.fillStyle(0xffd700, 0.14);
+        headerBand.fillRoundedRect(-cardW / 2, -cardH / 2, cardW, 50, { tl: r, tr: r, bl: 0, br: 0 });
+        items.push(headerBand);
+        items.push(this.add.text(-cardW / 2 + 12, -cardH / 2 + 8, '🐾', { fontSize: '20px' }));
+        items.push(this.add.text(cardW / 2 - 36, -cardH / 2 + 8, '🐾', { fontSize: '20px' }));
+        items.push(this.add.text(0, -cardH / 2 + 25, this.level.title, { fontSize: '26px', fontStyle: 'bold', color: '#fff8e7', stroke: '#000', strokeThickness: 2 }).setOrigin(0.5));
+        items.push(this.add.text(0, -cardH / 2 + 90, 'Collect a bone then guide the puppy home 🏠', { fontSize: '16px', color: '#ffd700', align: 'center', wordWrap: { width: cardW - 40 } }).setOrigin(0.5));
+        items.push(this.add.text(0, -cardH / 2 + 132, '⚠️  If Time or Stamina hits 0, you fail!', { fontSize: '14px', color: '#ff9944', align: 'center' }).setOrigin(0.5));
+        items.push(this.add.text(0, -cardH / 2 + 170, `Starting:  ⏰ Time ${this.level.initialResources.time}    🔥 Stamina ${this.level.initialResources.stamina}`, { fontSize: '16px', color: '#d5c5a0', align: 'center' }).setOrigin(0.5));
+        const btnBg = this.add.rectangle(0, cardH / 2 - 40, 160, 44, 0x27ae60).setStrokeStyle(2, 0xffffff, 0.7).setInteractive({ useHandCursor: true });
+        items.push(btnBg, this.add.text(0, cardH / 2 - 40, "Let's go! 🐾", { fontSize: '18px', fontStyle: 'bold', color: '#fff' }).setOrigin(0.5));
+        const container = this.add.container(cx, cy - 20, items).setDepth(3001).setAlpha(0);
+        this.tweens.add({ targets: container, alpha: 1, y: cy, duration: 400, ease: 'Back.easeOut' });
+        btnBg.once('pointerdown', () => {
+            overlay.destroy();
+            this.tweens.add({ targets: container, alpha: 0, y: cy - 20, duration: 300, ease: 'Power2', onComplete: () => { container.destroy(); onStart(); } });
+        });
     }
 
     private drawGraph(): void {
@@ -620,7 +675,7 @@ export class MainScene extends Phaser.Scene {
                 if (!rendered.has(uKey)) {
                     rendered.add(uKey);
                     const ui = this.createEffectBars(startX + (endX - startX) * 0.5, startY + (endY - startY) * 0.5, e.effects);
-                    if (ui) { this.edgeTextsMap.set(`${node.id}-${e.targetId}`, ui); this.edgeTextsMap.set(`${e.targetId}-${node.id}`, ui); }
+                    if (ui) { ui.setAlpha(0); this.edgeTextsMap.set(`${node.id}-${e.targetId}`, ui); this.edgeTextsMap.set(`${e.targetId}-${node.id}`, ui); }
                 }
             });
 
@@ -645,7 +700,7 @@ export class MainScene extends Phaser.Scene {
                 toggleTrap(4, 0.8);
                 
                 const isNeighbor = this.graph.find(n => n.id === this.currentNodeId)?.neighbors.some(e => e.targetId === node.id) ?? false;
-                const tt = node.type === NodeType.DEFENDER && !this.triggeredTraps.has(node.id) ? 'Defender Node:\nForces you to the highest cost path!' : node.nodeEffects?.some(e => e.resource === 'bones' && e.value > 0) ? 'Bone Node:\nCollect to increase score.' : (this.levelIndex === 0 && isNeighbor) ? 'Walkable Path:\nClick to move here.' : '';
+                const tt = node.type === NodeType.DEFENDER && !this.triggeredTraps.has(node.id) ? '🐿️ Squirrel Node:\nThe squirrel picks the hardest path for you!' : node.nodeEffects?.some(e => e.resource === 'bones' && e.value > 0) ? 'Bone Node:\nCollect to increase score.' : (this.levelIndex === 0 && isNeighbor) ? 'Walkable Path:\nClick to move here.' : '';
                 if (tt) this.tooltipText.setText(tt) && this.tooltipBg.setSize(this.tooltipText.width + 20, this.tooltipText.height + 20) && this.tooltipContainer.setPosition(node.x, node.y - 65).setAlpha(1);
 
                 if (!this.registry.get('goalReached') && !this.isMoving && !this.isGameOver && !this.isCatMoving) {
@@ -663,6 +718,12 @@ export class MainScene extends Phaser.Scene {
     private highlightPossibleMoves(): void {
         if (this.registry.get('goalReached') || this.isCatMoving) return;
         const cur = this.graph.find(n => n.id === this.currentNodeId)!;
+
+        // Show edge cost labels only for paths from the current node
+        this.edgeTextsMap.forEach(c => c.setAlpha(0));
+        cur.neighbors.forEach(edge => {
+            this.edgeTextsMap.get(`${cur.id}-${edge.targetId}`)?.setAlpha(1);
+        });;
         
         if (cur.type === NodeType.DEFENDER && !this.triggeredTraps.has(cur.id)) {
             const alert = this.add.text(this.puppy.x, this.puppy.y - 40, '❗', { fontSize: '24px', fontStyle: 'bold' }).setOrigin(0.5).setDepth(30);
@@ -670,7 +731,7 @@ export class MainScene extends Phaser.Scene {
             this.safePlay(sq, 'squirrel_idle');
 
             const squirrelMsg = this.levelIndex === 0
-                ? 'A Squirrel Node! 🐿️\nThe squirrel blocks your free choice and forces you onto the HARDEST path — maximum Time and Stamina cost.\nThis is how Defender Nodes work!'
+                ? 'A Squirrel Node! 🐿️\nThe squirrel blocks your free choice and forces you onto the HARDEST path — maximum Time and Stamina cost.\nWatch out for squirrels!'
                 : 'Oh look! A playful squirrel dashed out from the bushes!';
             this.showDialogue(squirrelMsg, () => {
                 alert.destroy();

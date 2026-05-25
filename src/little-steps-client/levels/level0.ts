@@ -10,7 +10,7 @@ export const level0: LevelData = {
     title: 'Tutorial',
     startNodeId: 0,
     goalNodeId: 6,
-    initialResources: { time: 100, stamina: 60, bones: 0 },
+    initialResources: { time: 60, stamina: 35, bones: 0 },
     maxResources: { stamina: 100 },
     nodes: [
         {

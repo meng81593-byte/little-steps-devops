@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(python -c \"from PIL import Image; img=Image.open\\('titre.jpg'\\); print\\(img.size\\)\")",
+      "PowerShell(Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile\\(\"d:\\\\phaser\\\\little-steps\\\\src\\\\little-steps-client\\\\assets\\\\titre.jpg\"\\); \"$\\($img.Width\\) x $\\($img.Height\\)\"; $img.Dispose\\(\\))",
+      "PowerShell(Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile\\(\"d:\\\\phaser\\\\little-steps\\\\src\\\\little-steps-client\\\\assets\\\\titre.png\"\\); \"$\\($img.Width\\) x $\\($img.Height\\)\"; $img.Dispose\\(\\))",
+      "PowerShell([System.IO.Directory]::GetFileSystemEntries\\(\"d:\\\\phaser\\\\little-steps\\\\dist\\\\assets\"\\) | Select-Object -First 40)",
+      "PowerShell([System.IO.Directory]::GetFileSystemEntries\\(\"d:\\\\phaser\\\\little-steps\\\\src\\\\little-steps-client\\\\assets\"\\))",
+      "PowerShell([System.IO.Directory]::GetFileSystemEntries\\(\"C:\\\\Users\\\\nknknnk\\\\Downloads\\\\lighthearted_loop_extracted\"\\))"
+    ]
+  }
+}

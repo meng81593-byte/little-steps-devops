@@ -5,7 +5,7 @@ export const level1: LevelData = {
     title: 'Level 1',
     startNodeId: 0,
     goalNodeId: 5,
-    initialResources: { time: 100, stamina: 50, bones: 0 },
+    initialResources: { time: 65, stamina: 20, bones: 0 },
     maxResources: { stamina: 100 },
     nodes: [
         {

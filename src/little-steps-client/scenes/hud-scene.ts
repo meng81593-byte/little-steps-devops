@@ -10,8 +10,6 @@ export class HudScene extends Phaser.Scene {
     // UI Elements for Icons and Text
     private timeGroup!: Phaser.GameObjects.Group;
     private staminaGroup!: Phaser.GameObjects.Group;
-    private timeLabel!: Phaser.GameObjects.Text;
-    private staminaLabel!: Phaser.GameObjects.Text;
     private timeValueText!: Phaser.GameObjects.Text;
     private staminaValueText!: Phaser.GameObjects.Text;
 
@@ -48,10 +46,10 @@ export class HudScene extends Phaser.Scene {
         this.staminaGroup = this.add.group();
 
         // Labels for the resource rows
-        this.timeLabel = this.add.text(14, 46, 'TIME', {
+        this.add.text(14, 46, 'TIME', {
             color: '#f1c40f', fontSize: '14px', fontStyle: 'bold', stroke: '#000000', strokeThickness: 2
         });
-        this.staminaLabel = this.add.text(14, 76, 'STAM', {
+        this.add.text(14, 76, 'STAM', {
             color: '#2ecc71', fontSize: '14px', fontStyle: 'bold', stroke: '#000000', strokeThickness: 2
         });
 
@@ -122,10 +120,10 @@ export class HudScene extends Phaser.Scene {
         const goalReached = this.registry.get('goalReached');
         const nodeType = this.registry.get('nodeType');
 
-        const goalText = goalReached ? ' | 🏁 Home reached!' : '';
-
-        if (node !== undefined) {
-            this.statusText.setText(`Node: ${node}${goalText}`);
+        if (goalReached) {
+            this.statusText.setText('🏁 Made it home!');
+        } else if (node !== undefined) {
+            this.statusText.setText('🐾 On the move...');
         }
 
         const resources = this.registry.get('resources') as ResourceVector;
@@ -189,7 +187,7 @@ export class HudScene extends Phaser.Scene {
                 this.showWinPopup();
             }
         } else if (nodeType === 'defender') {
-            this.hintText.setText('⚠️ DEFENDER TURN: Puppy is moving automatically!').setColor('#e74c3c');
+            this.hintText.setText('🐿️ A squirrel appeared! Choosing the hardest path...').setColor('#e74c3c');
         } else {
             this.hintText.setText('Click a highlighted node to move.').setColor('#c8d3ff');
         }
@@ -298,36 +296,63 @@ export class HudScene extends Phaser.Scene {
         const levelIndex = (this.registry.get('levelIndex') as number) ?? -1;
 
         let feedbackLine = '🎉 Level complete!';
-        let ratingColor = '#53d98a';
+        let ratingColor = '#58d68d';
+        let stars = 1;
 
         if (initial && final && egResult) {
             const fb = evaluatePerformance(egResult, initial, final);
             feedbackLine = fb.message;
-            ratingColor = fb.rating === 'perfect' ? '#f8c146' : fb.rating === 'good' ? '#53d98a' : '#c8d3ff';
+            if (fb.rating === 'perfect') { ratingColor = '#ffd700'; stars = 3; }
+            else if (fb.rating === 'good') { ratingColor = '#58d68d'; stars = 2; }
+            else { ratingColor = '#d5c5a0'; stars = 1; }
         }
 
         const cx = this.scale.width / 2;
         const cy = this.scale.height / 2;
-        const w = 420, h = 240;
+        const w = 420, h = 310, r = 20;
 
-        const bg = this.add.rectangle(0, 0, w, h, 0x121a2f, 0.95).setStrokeStyle(3, 0x87a1ff, 1);
-        const title = this.add.text(0, -80, '🏠 Made it home!', { fontSize: '28px', fontStyle: 'bold', color: '#f6f8ff' }).setOrigin(0.5);
+        const items: Phaser.GameObjects.GameObject[] = [];
+
+        // Rounded warm background
+        const bg = this.add.graphics();
+        bg.fillStyle(0x1e1230, 0.97);
+        bg.fillRoundedRect(-w / 2, -h / 2, w, h, r);
+        bg.lineStyle(3, 0xffd700, 1);
+        bg.strokeRoundedRect(-w / 2, -h / 2, w, h, r);
+        items.push(bg);
+
+        // Gold header strip
+        const headerBand = this.add.graphics();
+        headerBand.fillStyle(0xffd700, 0.14);
+        headerBand.fillRoundedRect(-w / 2, -h / 2, w, 50, { tl: r, tr: r, bl: 0, br: 0 });
+        items.push(headerBand);
+
+        // Paw print decorations
+        items.push(this.add.text(-w / 2 + 12, -h / 2 + 8, '🐾', { fontSize: '20px' }));
+        items.push(this.add.text(w / 2 - 36, -h / 2 + 8, '🐾', { fontSize: '20px' }));
+        items.push(this.add.text(0, -h / 2 + 25, '🏠 Made it home!', { fontSize: '24px', fontStyle: 'bold', color: '#fff8e7', stroke: '#000', strokeThickness: 2 }).setOrigin(0.5));
+
+        // Stars
+        [-52, 0, 52].forEach((sx, i) => {
+            items.push(this.add.text(sx, -h / 2 + 88, '★', {
+                fontSize: '44px', color: i < stars ? '#ffd700' : '#4a3555',
+                stroke: '#000000', strokeThickness: i < stars ? 2 : 1
+            }).setOrigin(0.5));
+        });
 
         const playerLeft = final?.time ?? 0;
         const optTime = egResult?.minBudget?.time;
         const optLeft = (initial && optTime !== undefined) ? initial.time - optTime : undefined;
-        const resourceLine = this.add.text(0, -30,
+        items.push(this.add.text(0, -h / 2 + 158,
             `Time left: ${playerLeft}${optLeft !== undefined ? `  /  Best possible: ${optLeft}` : ''}`,
-            { fontSize: '17px', color: '#c8d3ff' }
-        ).setOrigin(0.5);
+            { fontSize: '15px', color: '#d5c5a0' }
+        ).setOrigin(0.5));
 
-        const feedback = this.add.text(0, 15, feedbackLine, {
-            fontSize: '18px', color: ratingColor, wordWrap: { width: w - 40 }, align: 'center', fontStyle: 'bold'
-        }).setOrigin(0.5);
+        items.push(this.add.text(0, -h / 2 + 196, feedbackLine, {
+            fontSize: '16px', color: ratingColor, wordWrap: { width: w - 40 }, align: 'center', fontStyle: 'bold'
+        }).setOrigin(0.5));
 
         const hasReward = levelIndex >= 1 && levelIndex <= 3;
-        const items: Phaser.GameObjects.GameObject[] = [bg, title, resourceLine, feedback];
-
         const goMenu = () => {
             this.registry.events.off('changedata', this.refreshStatus, this);
             this.scene.stop('MainScene');
@@ -336,24 +361,20 @@ export class HudScene extends Phaser.Scene {
 
         if (hasReward) {
             const rewardState = unlockRewardForLevel(levelIndex);
-
-            const rewardBtnBg = this.add.rectangle(-95, 80, 170, 40, 0xFFD700).setInteractive({ useHandCursor: true });
-            const rewardBtnTxt = this.add.text(-95, 80, '🎁 Customize', { fontSize: '15px', fontStyle: 'bold', color: '#1a1a1a' }).setOrigin(0.5);
-            const menuBtnBg = this.add.rectangle(95, 80, 130, 40, 0x34495e).setInteractive({ useHandCursor: true });
-            const menuBtnTxt = this.add.text(95, 80, '🏠 Menu', { fontSize: '15px', color: '#f6f8ff' }).setOrigin(0.5);
-
+            const rewardBtnBg = this.add.rectangle(-95, h / 2 - 52, 170, 40, 0xFFD700).setInteractive({ useHandCursor: true });
+            const menuBtnBg = this.add.rectangle(95, h / 2 - 52, 130, 40, 0x4a3555).setStrokeStyle(2, 0xffffff, 0.4).setInteractive({ useHandCursor: true });
             rewardBtnBg.on('pointerdown', () => this.showRewardPopup(levelIndex, rewardState));
             menuBtnBg.on('pointerdown', goMenu);
-            items.push(rewardBtnBg, rewardBtnTxt, menuBtnBg, menuBtnTxt);
+            items.push(rewardBtnBg, this.add.text(-95, h / 2 - 52, '🎁 Customize', { fontSize: '15px', fontStyle: 'bold', color: '#1a1a1a' }).setOrigin(0.5),
+                       menuBtnBg, this.add.text(95, h / 2 - 52, '🏠 Menu', { fontSize: '15px', color: '#d5c5a0' }).setOrigin(0.5));
         } else {
-            const btnBg = this.add.rectangle(0, 80, 160, 40, 0x34495e).setInteractive({ useHandCursor: true });
-            const btnTxt = this.add.text(0, 80, '🏠 Menu', { fontSize: '18px', color: '#f6f8ff' }).setOrigin(0.5);
+            const btnBg = this.add.rectangle(0, h / 2 - 52, 160, 40, 0x4a3555).setStrokeStyle(2, 0xffffff, 0.4).setInteractive({ useHandCursor: true });
             btnBg.on('pointerdown', goMenu);
-            items.push(btnBg, btnTxt);
+            items.push(btnBg, this.add.text(0, h / 2 - 52, '🏠 Menu', { fontSize: '18px', color: '#d5c5a0' }).setOrigin(0.5));
         }
 
         this.winPopup = this.add.container(cx, cy, items).setDepth(100).setAlpha(0);
-        this.tweens.add({ targets: this.winPopup, alpha: 1, duration: 400, ease: 'Power2' });
+        this.tweens.add({ targets: this.winPopup, alpha: 1, duration: 400, ease: 'Back.easeOut' });
     }
 
     private showRewardPopup(levelIndex: number, state: CosmeticsState): void {

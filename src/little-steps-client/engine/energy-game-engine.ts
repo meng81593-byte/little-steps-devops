@@ -177,8 +177,6 @@ export function computeEnergyGame(level: LevelData): EnergyGameResult {
         ? { time: startBudget.time, stamina: startBudget.stamina, bones: 0 }
         : undefined;
 
-    console.log(`[EnergyGame] iters=${iters}, winnable=${isWinnable}, minBudget=`, minBudget);
-
     return { minBudget, levelWinnable: isWinnable, nodeWinBudgets, optimalMove };
 }
 
