@@ -271,21 +271,23 @@ nodes3 = [
     (250, 400),   # node 2 — first split    → tile col 6,  row 10
     (250, 240),   # node 3 — STAMINA BOOST  → tile col 6,  row 6
     (450, 520),   # node 4 — risky path     → tile col 11, row 13
-    (450, 240),   # node 5 — BONE           → tile col 11, row 6
-    (600, 380),   # node 6 — junction       → tile col 15, row 10
-    (600, 520),   # node 7 — CAT START      → tile col 15, row 13
-    (750, 380),   # node 8 — safe node      → tile col 19, row 10
+    (450, 240),   # node 5 — split          → tile col 11, row 6
+    (450, 380),   # node 0 — BONE (dead-end below node 5) → tile col 11, row 10
+    (600, 380),   # node 6 — DEFENDER       → tile col 15, row 10
+    (600, 520),   # node 7 — lower node     → tile col 15, row 13
+    (750, 380),   # node 8 — CAT START      → tile col 19, row 10
     (820, 280),   # node 9 — GOAL           → tile col 21, row 7
 ]
 edges3 = [
     ((100,400),(250,400)),   # 1 → 2
     ((250,400),(250,240)),   # 2 → 3 (upper, toward stamina)
     ((250,400),(450,520)),   # 2 → 4 (lower, risky)
-    ((250,240),(450,240)),   # 3 → 5 (bone)
-    ((450,240),(600,380)),   # 5 → 6
+    ((250,240),(450,240)),   # 3 → 5
+    ((450,240),(450,380)),   # 5 → 0 (bone dead-end, straight down)
+    ((450,240),(600,380)),   # 5 → 6 (DEFENDER)
     ((450,520),(600,380)),   # 4 → 6
-    ((450,520),(600,520)),   # 4 → 7 (cat territory)
-    ((600,380),(600,520)),   # 6 ↔ 7 (junction meets cat)
+    ((450,520),(600,520)),   # 4 → 7
+    ((600,380),(600,520)),   # 6 ↔ 7
     ((600,380),(750,380)),   # 6 → 8
     ((600,520),(750,380)),   # 7 → 8
     ((750,380),(820,280)),   # 8 → 9 GOAL

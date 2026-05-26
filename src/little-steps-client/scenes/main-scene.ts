@@ -31,6 +31,9 @@ export class MainScene extends Phaser.Scene {
     private isFogOfWar = false;
     private isTutorialActive = false;
     private isCatMoving = false;
+    private skipCatMoveOnce = false;
+    private previousDogNodeId = 0;
+    private dogTrail: number[] = [];
 
     // --- Tracking Collections ---
     private revealedNodes = new Set<number>();
@@ -78,7 +81,9 @@ export class MainScene extends Phaser.Scene {
         this.currentNodeId = this.level.startNodeId;
         
         // Reset all state flags
-        this.isMoving = this.isGameOver = this.isCatMoving = this.isTutorialActive = false;
+        this.isMoving = this.isGameOver = this.isCatMoving = this.isTutorialActive = this.skipCatMoveOnce = false;
+        this.previousDogNodeId = this.level.startNodeId;
+        this.dogTrail = [this.level.startNodeId];
         this.catNodeId = this.catSprite = this.squirrel = undefined;
         this.accessoryGfx = this.clothGfx = undefined;
         this.isFogOfWar = this.levelIndex > 1;
@@ -134,6 +139,7 @@ export class MainScene extends Phaser.Scene {
     create(): void {
         this.createBoneTexture();
         this.createCloudTexture();
+        this.createClockTexture();
         
         // Setup tilemap background
         const map = this.make.tilemap({ key: `map${this.levelIndex}` });
@@ -283,6 +289,17 @@ export class MainScene extends Phaser.Scene {
         this.make.graphics({ x: 0, y: 0 }).fillStyle(0xecf0f1, 1).fillCircle(35, 35, 25).fillCircle(60, 30, 30).fillCircle(85, 35, 25).fillCircle(25, 55, 20).fillCircle(50, 55, 25).fillCircle(75, 55, 25).fillCircle(95, 50, 20).fillCircle(60, 65, 20).generateTexture('cloud', 120, 90).destroy();
     }
 
+    private createClockTexture() {
+        if (this.textures.exists('clock')) return;
+        const canvas = document.createElement('canvas');
+        canvas.width = 22;
+        canvas.height = 22;
+        const ctx = canvas.getContext('2d')!;
+        ctx.font = '18px sans-serif';
+        ctx.fillText('⏰', 0, 18);
+        this.textures.addCanvas('clock', canvas);
+    }
+
     private showSweatAnimation(x: number, y: number): void {
         [
             { ox: -14, oy:  0, delay:   0, w: 9,  h: 13 },
@@ -404,7 +421,7 @@ export class MainScene extends Phaser.Scene {
                 ]);
             } else {
                 const isTime = eff.resource === 'time';
-                const textureKey = isTime ? 'heart' : 'fire';
+                const textureKey = isTime ? 'clock' : 'heart';
                 const numColor = isTime ? '#f1c40f' : '#2ecc71';
                 const isCost = eff.value < 0;
                 const absVal = Math.abs(eff.value);
@@ -459,14 +476,14 @@ export class MainScene extends Phaser.Scene {
             if (triggerChase) {
                 this.squirrel = this.add.sprite(this.puppy.x, this.puppy.y, 'squirrel_img').setScale(1.5).setDepth(10).setOrigin(0.5, 0.9);
                 this.safePlay(this.squirrel.setFlipX(targetNode.x < this.squirrel.x), 'squirrel_run');
-                this.tweens.add({ targets: this.squirrel, x: targetNode.x, y: targetNode.y, duration: 1500, onComplete: () => this.safePlay(this.squirrel, 'squirrel_idle') });
-                this.time.delayedCall(400, () => {
+                this.tweens.add({ targets: this.squirrel, x: targetNode.x, y: targetNode.y, duration: 750, onComplete: () => this.safePlay(this.squirrel, 'squirrel_idle') });
+                this.time.delayedCall(200, () => {
                     this.safePlay(this.puppy.setFlipX(targetNode.x < this.puppy.x), 'walk');
-                    this.tweens.add({ targets: this.puppy, x: targetNode.x, y: targetNode.y, duration: 2500, ease: 'Power2', onComplete: () => { this.squirrel?.destroy(); this.handleMoveCompletion(targetNodeId, targetNode); } });
+                    this.tweens.add({ targets: this.puppy, x: targetNode.x, y: targetNode.y, duration: 1200, ease: 'Power2', onComplete: () => { this.squirrel?.destroy(); this.handleMoveCompletion(targetNodeId, targetNode); } });
                 });
             } else {
                 this.safePlay(this.puppy.setFlipX(targetNode.x < this.puppy.x), 'walk');
-                this.tweens.add({ targets: this.puppy, x: targetNode.x, y: targetNode.y, duration: 2500, ease: 'Power2', onComplete: () => this.handleMoveCompletion(targetNodeId, targetNode) });
+                this.tweens.add({ targets: this.puppy, x: targetNode.x, y: targetNode.y, duration: 1200, ease: 'Power2', onComplete: () => this.handleMoveCompletion(targetNodeId, targetNode) });
             }
         }
     }
@@ -491,7 +508,7 @@ export class MainScene extends Phaser.Scene {
             const pt = path[i], prev = i > 0 ? path[i - 1] : this.puppy;
             if (Math.abs(pt.x - (prev as any).x) > 2) this.puppy.setFlipX(pt.x < (prev as any).x);
             const dist = Phaser.Math.Distance.Between(this.puppy.x, this.puppy.y, pt.x, pt.y);
-            dist < 2 ? moveStep(i + 1) : this.tweens.add({ targets: this.puppy, x: pt.x, y: pt.y, duration: dist * 8, ease: 'Linear', onComplete: () => moveStep(i + 1) });
+            dist < 2 ? moveStep(i + 1) : this.tweens.add({ targets: this.puppy, x: pt.x, y: pt.y, duration: dist * 4, ease: 'Linear', onComplete: () => moveStep(i + 1) });
         };
         this.safePlay(this.puppy, 'walk');
         moveStep(1);
@@ -499,7 +516,9 @@ export class MainScene extends Phaser.Scene {
 
     private handleMoveCompletion(targetNodeId: number, targetNode: GraphNode): void {
         this.safePlay(this.puppy, 'idle');
+        this.previousDogNodeId = this.currentNodeId;
         this.registry.set('node', this.currentNodeId = targetNodeId);
+        this.dogTrail.push(targetNodeId);
         this.registry.set('nodeType', targetNode.type);
 
         if (targetNode.nodeEffects?.length) {
@@ -522,7 +541,14 @@ export class MainScene extends Phaser.Scene {
             this.highlightPossibleMoves();
             this.triggerVictory();
         } else if (this.catNodeId !== undefined) {
-            this.currentNodeId === this.catNodeId ? this.triggerDefeat('cat') : this.moveCat();
+            if (this.currentNodeId === this.catNodeId) {
+                this.triggerDefeat('cat');
+            } else if (this.skipCatMoveOnce) {
+                this.skipCatMoveOnce = false;
+                this.highlightPossibleMoves();
+            } else {
+                this.moveCat();
+            }
         } else {
             const tutMsg = this.tutorialDialogues.get(targetNodeId);
             if (tutMsg) {
@@ -535,25 +561,42 @@ export class MainScene extends Phaser.Scene {
     }
 
     /**
-     * Handles enemy movement logic and animation playback
+     * Handles enemy movement logic and animation playback.
+     * Greedy: moves to the neighbor node with minimum Euclidean distance to the player.
      */
     private moveCat(): void {
         if (this.catNodeId === undefined || !this.catSprite || this.isGameOver) return;
+
         const catNode = this.graph.find(n => n.id === this.catNodeId)!;
-        let bestTarget = catNode.neighbors.some(e => e.targetId === this.currentNodeId) ? this.currentNodeId : catNode.neighbors.reduce((best, edge) => {
-            const cost = this.energyGameResult.nodeWinBudgets.get((this.currentNodeId * 1000) + edge.targetId)?.time ?? 0;
-            const dist = Phaser.Math.Distance.Between(this.graph.find(n => n.id === edge.targetId)!.x, this.graph.find(n => n.id === edge.targetId)!.y, this.graph.find(n => n.id === this.currentNodeId)!.x, this.graph.find(n => n.id === this.currentNodeId)!.y);
-            return cost > best.cost || (cost === best.cost && dist < best.dist) ? { id: edge.targetId, cost, dist } : best;
-        }, { id: this.catNodeId, cost: -1, dist: Infinity }).id;
+        let bestTarget = this.catNodeId;
+
+        // Trail-following: find last occurrence of cat's node in dog's trail, move to the next node
+        const lastIdx = this.dogTrail.lastIndexOf(this.catNodeId);
+        if (lastIdx !== -1 && lastIdx + 1 < this.dogTrail.length) {
+            const nextInTrail = this.dogTrail[lastIdx + 1];
+            if (catNode.neighbors.some(e => e.targetId === nextInTrail)) {
+                bestTarget = nextInTrail;
+            }
+        }
+
+        // Fallback: cat's node not in trail yet — use Euclidean to previousDogNodeId
+        if (bestTarget === this.catNodeId) {
+            const fallbackTarget = this.graph.find(n => n.id === this.previousDogNodeId)
+                ?? this.graph.find(n => n.id === this.currentNodeId)!;
+            let bestDist = Infinity;
+            for (const edge of catNode.neighbors) {
+                const neighbor = this.graph.find(n => n.id === edge.targetId);
+                if (!neighbor) continue;
+                const dist = Phaser.Math.Distance.Between(neighbor.x, neighbor.y, fallbackTarget.x, fallbackTarget.y);
+                if (dist < bestDist) { bestDist = dist; bestTarget = edge.targetId; }
+            }
+        }
 
         this.isCatMoving = true;
         const targetNode = this.graph.find(n => n.id === bestTarget)!;
-        
-        // Select correct animation based on whether it's the cat or the dog fallback
         const animToPlay = this.levelIndex === 3 ? 'cat_walk' : 'walk';
         this.safePlay(this.catSprite.setFlipX(targetNode.x < this.catSprite.x), animToPlay);
-        
-        this.tweens.add({ targets: this.catSprite, x: targetNode.x, y: targetNode.y, duration: 800, ease: 'Linear', onComplete: () => {
+        this.tweens.add({ targets: this.catSprite, x: targetNode.x, y: targetNode.y, duration: 400, ease: 'Linear', onComplete: () => {
             this.catSprite?.stop();
             this.catNodeId = bestTarget;
             this.isCatMoving = false;
@@ -584,12 +627,12 @@ export class MainScene extends Phaser.Scene {
         const r = 20;
         const info = {
             time:    { header: '⏰ Time Ran Out!',       body: 'You spent too many time units.\nTry a more direct route next time!',  border: 0xc0392b, icon: '⏰' },
-            stamina: { header: '🔥 Stamina Depleted!',   body: 'You exhausted all your stamina.\nLook for cheaper paths!',            border: 0x8e44ad, icon: '🔥' },
+            stamina: { header: '❤️ Stamina Depleted!',   body: 'You exhausted all your stamina.\nLook for cheaper paths!',            border: 0x8e44ad, icon: '❤️' },
             cat:     { header: '😿 Caught by the Cat!', body: 'The cat intercepted you!\nMove faster or find a safer route.',        border: 0xd35400, icon: '😿' }
         }[reason];
         const mb = this.energyGameResult?.minBudget;
         const optLine = mb
-            ? `Optimal route: ⏰ ${mb.time} time  🔥 ${mb.stamina} stamina\n(You started with ⏰ ${this.level.initialResources.time}  🔥 ${this.level.initialResources.stamina})`
+            ? `Optimal route: ⏰ ${mb.time} time  ❤️ ${mb.stamina} stamina\n(You started with ⏰ ${this.level.initialResources.time}  ❤️ ${this.level.initialResources.stamina})`
             : '';
         const items: Phaser.GameObjects.GameObject[] = [];
         const bg = this.add.graphics();
@@ -640,7 +683,7 @@ export class MainScene extends Phaser.Scene {
         items.push(this.add.text(0, -cardH / 2 + 25, this.level.title, { fontSize: '26px', fontStyle: 'bold', color: '#fff8e7', stroke: '#000', strokeThickness: 2 }).setOrigin(0.5));
         items.push(this.add.text(0, -cardH / 2 + 90, 'Collect a bone then guide the puppy home 🏠', { fontSize: '16px', color: '#ffd700', align: 'center', wordWrap: { width: cardW - 40 } }).setOrigin(0.5));
         items.push(this.add.text(0, -cardH / 2 + 132, '⚠️  If Time or Stamina hits 0, you fail!', { fontSize: '14px', color: '#ff9944', align: 'center' }).setOrigin(0.5));
-        items.push(this.add.text(0, -cardH / 2 + 170, `Starting:  ⏰ Time ${this.level.initialResources.time}    🔥 Stamina ${this.level.initialResources.stamina}`, { fontSize: '16px', color: '#d5c5a0', align: 'center' }).setOrigin(0.5));
+        items.push(this.add.text(0, -cardH / 2 + 170, `Starting:  ⏰ Time ${this.level.initialResources.time}    ❤️ Stamina ${this.level.initialResources.stamina}`, { fontSize: '16px', color: '#d5c5a0', align: 'center' }).setOrigin(0.5));
         const btnBg = this.add.rectangle(0, cardH / 2 - 40, 160, 44, 0x27ae60).setStrokeStyle(2, 0xffffff, 0.7).setInteractive({ useHandCursor: true });
         items.push(btnBg, this.add.text(0, cardH / 2 - 40, "Let's go! 🐾", { fontSize: '18px', fontStyle: 'bold', color: '#fff' }).setOrigin(0.5));
         const container = this.add.container(cx, cy - 20, items).setDepth(3001).setAlpha(0);
@@ -767,7 +810,7 @@ export class MainScene extends Phaser.Scene {
                         dist < 2 ? moveSquirrelStep(i + 1) : this.tweens.add({ targets: sq, x: pt.x + (isLast?35:0), y: pt.y - (isLast?10:0), duration: dist * 5, ease: 'Linear', onComplete: () => moveSquirrelStep(i + 1) });
                     };
                     moveSquirrelStep(0);
-                    this.time.delayedCall(400, () => this.moveToNextNode(nextId));
+                    this.time.delayedCall(400, () => { this.skipCatMoveOnce = true; this.moveToNextNode(nextId); });
                 } else sq.destroy();
             }); 
             return;

@@ -26,6 +26,7 @@ export class HudScene extends Phaser.Scene {
     create(): void {
         // Create a programmatic bone texture so we don't need external assets for it
         this.createBoneTexture();
+        this.createClockTexture();
 
         // HUD Background
         this.add.rectangle(0, 0, 520, 140, 0x0a0f1e, 0.75)
@@ -115,6 +116,17 @@ export class HudScene extends Phaser.Scene {
         boneGfx.destroy();
     }
 
+    private createClockTexture() {
+        if (this.textures.exists('clock')) return;
+        const canvas = document.createElement('canvas');
+        canvas.width = 22;
+        canvas.height = 22;
+        const ctx = canvas.getContext('2d')!;
+        ctx.font = '18px sans-serif';
+        ctx.fillText('⏰', 0, 18);
+        this.textures.addCanvas('clock', canvas);
+    }
+
     private refreshStatus(): void {
         const node = this.registry.get('node');
         const goalReached = this.registry.get('goalReached');
@@ -131,15 +143,15 @@ export class HudScene extends Phaser.Scene {
         const preview = this.registry.get('preview') as ResourceVector | null;
 
         if (resources && initial) {
-            // Draw Time Icons (heart) - Centers vertically around y=54 to align with text
+            // Draw Time Icons (clock) - Centers vertically around y=54 to align with text
             const timeEndX = this.drawIconBar(
-                this.timeGroup, 65, 54, 'heart',
+                this.timeGroup, 65, 54, 'clock',
                 resources.time, preview ? preview.time : null
             );
 
-            // Draw Stamina Icons (fire) - Centers vertically around y=84
+            // Draw Stamina Icons (heart) - Centers vertically around y=84
             const stamEndX = this.drawIconBar(
-                this.staminaGroup, 65, 84, 'fire',
+                this.staminaGroup, 65, 84, 'heart',
                 resources.stamina, preview ? preview.stamina : null
             );
 
