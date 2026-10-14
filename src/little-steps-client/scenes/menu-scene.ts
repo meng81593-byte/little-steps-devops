@@ -443,15 +443,15 @@ export class MenuScene extends Phaser.Scene {
 
         addRow('Color', cy - 10,
             COLOR_DEFS.map(d => ({ id: d.id, label: d.label, swatch: d.swatch })),
-            id => this.cosmeticsState.unlockedColors.includes(id as any), 'color');
+            id => this.cosmeticsState.unlockedColors.some(unlocked => unlocked === id), 'color');
 
         addRow('Accessory', cy + 90,
             ACCESSORY_DEFS.map(d => ({ id: d.id, label: d.label })),
-            id => this.cosmeticsState.unlockedAccessories.includes(id as any), 'acc');
+            id => this.cosmeticsState.unlockedAccessories.some(unlocked => unlocked === id), 'acc');
 
         addRow('Clothes', cy + 155,
             CLOTH_DEFS.map(d => ({ id: d.id, label: d.label })),
-            id => this.cosmeticsState.unlockedClothes.includes(id as any), 'cloth');
+            id => this.cosmeticsState.unlockedClothes.some(unlocked => unlocked === id), 'cloth');
 
         const closeGfx  = this.add.graphics();
         const drawClose = (fill: number) => {
@@ -475,9 +475,19 @@ export class MenuScene extends Phaser.Scene {
     }
 
     private selectCosmetic(cat: string, id: string) {
-        if (cat === 'color') this.cosmeticsState.selectedColor = id as any;
-        else if (cat === 'acc') this.cosmeticsState.selectedAccessory = id as any;
-        else this.cosmeticsState.selectedCloth = id as any;
+        if (cat === 'color') {
+            const choice = COLOR_DEFS.find(item => item.id === id);
+            if (!choice || !this.cosmeticsState.unlockedColors.includes(choice.id)) return;
+            this.cosmeticsState.selectedColor = choice.id;
+        } else if (cat === 'acc') {
+            const choice = ACCESSORY_DEFS.find(item => item.id === id);
+            if (!choice || !this.cosmeticsState.unlockedAccessories.includes(choice.id)) return;
+            this.cosmeticsState.selectedAccessory = choice.id;
+        } else if (cat === 'cloth') {
+            const choice = CLOTH_DEFS.find(item => item.id === id);
+            if (!choice || !this.cosmeticsState.unlockedClothes.includes(choice.id)) return;
+            this.cosmeticsState.selectedCloth = choice.id;
+        } else return;
         saveCosmetics(this.cosmeticsState);
         this.refreshCosmeticsPreview();
         this.updateCosmeticsHighlights();

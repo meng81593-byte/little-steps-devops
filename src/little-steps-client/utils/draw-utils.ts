@@ -44,7 +44,7 @@ export function createDefenderTrapIcon(scene: Phaser.Scene, x: number, y: number
         ease: 'Sine.easeInOut'
     });
 
-    const coreTween = scene.tweens.add({
+    scene.tweens.add({
         targets: coreGfx,
         alpha: 0.2,
         duration: 800,

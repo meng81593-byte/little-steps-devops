@@ -20,12 +20,6 @@ export default {
             { test: /phaser\.js$/, loader: 'expose-loader', options: { exposes: 'phaser' } }
         ]
     },
-    devServer: {
-        host: '127.0.0.1',
-        port: 8080,
-        open: true,
-        watchFiles: ['src/little-steps-client/assets/**/*']
-    },
     resolve: {
         extensions: ['.ts', '.js'],
         alias: {

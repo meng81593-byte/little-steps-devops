@@ -5,6 +5,8 @@
     "moduleResolution": "bundler",
     "sourceMap": true,
     "noImplicitAny": false,
-    "strict": false
-  }
+    "strict": false,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "playwright.config.ts", "vitest.config.ts"]
 }

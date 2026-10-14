@@ -1,24 +1,93 @@
-# Little Steps Home
+# Little Steps DevOps
 
-**Little Steps Home** is a cozy adventure game where a lost puppy must return home.
-The player must manage limited resources while navigating through different paths.
-Each choice affects the available resources and determines whether the puppy can reach home.
+[![Quality](https://github.com/meng81593-byte/little-steps-devops/actions/workflows/quality.yml/badge.svg)](https://github.com/meng81593-byte/little-steps-devops/actions/workflows/quality.yml)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
 
-## Deployment
-Once code is merged into the main branch, you can view the product of the main branch in the deployed GitHub page
+A hands-on DevOps portfolio project around **Little Steps Home**, a Phaser browser game in which a puppy must reach home while managing time, stamina, and route choices.
 
-https://equivio.github.io/little-steps/
+The application started as a **team project**. My initial contributions were the game concept, page/interface design, route design, visual design, and backgrounds. I subsequently continued updating the project and developed its container and delivery workflow. See [project credits](docs/credits.md) for the contribution boundary and asset licensing status.
 
-## Setup
+## What this project demonstrates
 
-- Install dependencies: `npm install`
-- Start dev server: `npm run dev`
-- Build for production: `npm run build`
-- Run linter: `npm run lint`
+- Reproducible Node.js 24 builds using `npm ci` and a committed lockfile.
+- TypeScript linting, type checks, and regression tests for resource rules and winning budgets.
+- Production browser checks with Playwright, including asset loading.
+- Multi-stage Docker packaging with non-root Nginx on port 8080 and a `/healthz` endpoint.
+- GitHub Actions checks for dependency vulnerabilities, builds, running containers, browser behavior, and fixable high/critical image vulnerabilities.
+- Documented delivery and operations work, linked to the [Terraform network project](https://github.com/meng81593-byte/aws-terraform-network-lab).
 
-## Current skeleton
+The application is static. It does not require a backend, database, or runtime AWS API permissions. AWS container deployment is an operations exercise; static hosting is sufficient for a permanent game demo.
 
-- Webpack + TypeScript + Phaser 3 setup
-- One simple level in `src/little-steps-client/levels/level-data.ts`
-- `MainScene` draws nodes/edges and moves a puppy token on `SPACE`
-- `HudScene` displays current node and goal state
+## Architecture
+
+```mermaid
+flowchart LR
+    Code[TypeScript + Phaser + assets] --> Checks[Lint + types + regression tests]
+    Checks --> Build[Webpack production build]
+    Build --> Browser[Playwright browser checks]
+    Build --> Docker[Node builder → non-root Nginx]
+    Docker --> Runtime[HTTP + browser checks against running container]
+    Runtime --> Scan[Image vulnerability scan]
+```
+
+## Run locally
+
+Prerequisites: Node.js **24.x**, npm, and optionally Docker for the container exercise.
+
+```bash
+git clone https://github.com/meng81593-byte/little-steps-devops.git
+cd little-steps-devops
+npm ci
+npm run dev
+```
+
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080). The development server binds to loopback. Webpack watches source changes; refresh the browser after each successful rebuild.
+
+## Verify a change
+
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm audit --audit-level=high
+npm run build
+npx playwright install chromium
+npm run test:e2e
+```
+
+Playwright starts a local server for the production `dist/` assets. In Linux CI, install browser dependencies using `npx playwright install --with-deps chromium`. Test traces and failure screenshots are retained in CI artifacts.
+
+## Run the container
+
+```bash
+docker build -t little-steps:local .
+docker run --rm -d --name little-steps -p 127.0.0.1:8080:8080 little-steps:local
+```
+
+Open the game or request `/healthz`. Stop it when finished:
+
+```bash
+docker logs little-steps
+docker stop little-steps
+```
+
+The runtime serves only generated assets, listens on a non-root port, and runs as the image's unprivileged user. Base images track maintained release tags; deployment should record the resulting image digest.
+
+## Repository map
+
+- `src/little-steps-client/`: scenes, levels, assets, and resource analysis.
+- `tests/unit/`: resource and budget regressions.
+- `tests/e2e/`: production browser verification.
+- `scripts/`: local serving and development tooling.
+- `Dockerfile` and `nginx.conf`: runtime packaging and health endpoint.
+- `.github/workflows/quality.yml`: quality and running-container checks.
+- `docs/`: credits, validation evidence, and operational notes.
+
+## Analysis limits
+
+The budget engine retains Pareto tradeoffs between time and stamina rather than combining incompatible routes. Its graph models adversarial defender choices and monotone bone collection. The game also has interactive trap behavior and a greedy cat, so displayed budgets are resource estimates for the graph model, not a guarantee that every live-play strategy succeeds. See [validation notes](docs/validation.md).
+
+## Deployment and evidence
+
+The previous README linked to another account's Pages site. That link is not presented as deployment evidence for this repository. Current validation evidence and deployment progress are recorded in [validation notes](docs/validation.md). AWS experiments must be cleaned up after verification; do not leave a learning environment running unattended.
