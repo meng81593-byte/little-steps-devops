@@ -40,7 +40,7 @@ export class MainScene extends Phaser.Scene {
     private triggeredTraps = new Set<number>();
     
     // --- Visual Asset Maps ---
-    private nodeGraphicsMap = new Map<number, Phaser.GameObjects.GameObject>();
+    private nodeGraphicsMap = new Map<number, Phaser.GameObjects.Arc | Phaser.GameObjects.Container>();
     private nodeTextsMap = new Map<number, Phaser.GameObjects.Text>();
     private edgeGraphicsMap = new Map<string, Phaser.GameObjects.Graphics>();
     private edgeTextsMap = new Map<string, Phaser.GameObjects.Container>();
@@ -96,7 +96,8 @@ export class MainScene extends Phaser.Scene {
         }
 
         // Compute optimal paths using the engine
-        const graphForEngine = this.level.catStartNodeId !== undefined ? buildCatChaseGraph(this.level) : this.level;
+        const movementLevel = { ...this.level, nodes: this.graph };
+        const graphForEngine = this.level.catStartNodeId !== undefined ? buildCatChaseGraph(movementLevel) : movementLevel;
         this.energyGameResult = computeEnergyGame(graphForEngine);
 
         // Clear all tracking maps/sets for level restart
@@ -158,7 +159,7 @@ export class MainScene extends Phaser.Scene {
         this.drawGraph();
 
         if (this.isFogOfWar) {
-            [this.nodeGraphicsMap, this.nodeTextsMap, this.edgeGraphicsMap, this.edgeTextsMap, this.nodeEffectTextsMap].forEach(m => m.forEach(o => (o as any).setAlpha(0)));
+            [this.nodeGraphicsMap, this.nodeTextsMap, this.edgeGraphicsMap, this.edgeTextsMap, this.nodeEffectTextsMap].forEach(m => m.forEach(o => o.setAlpha(0)));
             this.revealNode(this.currentNodeId, false);
             this.revealEdgesFrom(this.currentNodeId, false);
         }
@@ -254,8 +255,8 @@ export class MainScene extends Phaser.Scene {
 
     private showDialogue(text: string, onComplete: () => void): void {
         const { width, height } = this.scale;
-        const blocker = this.add.rectangle(0, 0, width, height, 0x000000, 0).setOrigin(0).setDepth(3000).setInteractive({ useHandCursor: true });
-        const container = this.add.container(width / 2, height + 200).setDepth(3001);
+        const blocker = this.add.rectangle(0, 0, width, height, 0x000000, 0).setName('dialogue-blocker').setOrigin(0).setDepth(3000).setInteractive({ useHandCursor: true });
+        const container = this.add.container(width / 2, height + 200).setName('tutorial-dialogue').setDepth(3001);
 
         const msg = this.add.text(0, 0, text, { fontSize: '22px', color: '#ffffff', fontStyle: 'bold', wordWrap: { width: width * 0.8 - 40 } }).setOrigin(0.5);
         const hint = this.add.text(0, 0, 'tap anywhere to continue', { fontSize: '13px', color: '#aaaaaa' }).setOrigin(0.5);
@@ -372,14 +373,20 @@ export class MainScene extends Phaser.Scene {
     }
 
     private createMagicDustEmitter(x: number, y: number, color: number) {
-        return this.add.particles(x, y, 'white_dot', { speed: { min: 10, max: 25 }, gravityY: -5, emitZone: { type: 'random', source: new Phaser.Geom.Circle(0, 0, 12) }, scale: { start: 0, end: 0.8 }, alpha: { start: 0, end: 1 }, lifespan: { min: 1000, max: 2500 }, frequency: 40, quantity: 1, tint: color, blendMode: 'ADD' }).setDepth(100);
+        const circle = new Phaser.Geom.Circle(0, 0, 12);
+        const source = { getRandomPoint: (point: Phaser.Types.Math.Vector2Like) => {
+            const randomPoint = Phaser.Geom.Circle.Random(circle);
+            point.x = randomPoint.x;
+            point.y = randomPoint.y;
+        } };
+        return this.add.particles(x, y, 'white_dot', { speed: { min: 10, max: 25 }, gravityY: -5, emitZone: { type: 'random', source }, scale: { start: 0, end: 0.8 }, alpha: { start: 0, end: 1 }, lifespan: { min: 1000, max: 2500 }, frequency: 40, quantity: 1, tint: color, blendMode: 'ADD' }).setDepth(100);
     }
 
     private revealNode(nodeId: number, animate: boolean): void {
         if (this.revealedNodes.has(nodeId)) return;
         this.revealedNodes.add(nodeId);
         
-        const targets = [this.nodeGraphicsMap.get(nodeId), this.nodeTextsMap.get(nodeId), this.nodeEffectTextsMap.get(nodeId)].filter(Boolean) as any[];
+        const targets = [this.nodeGraphicsMap.get(nodeId), this.nodeTextsMap.get(nodeId), this.nodeEffectTextsMap.get(nodeId)].filter((target): target is Phaser.GameObjects.Arc | Phaser.GameObjects.Container | Phaser.GameObjects.Text => target !== undefined);
         if (targets.length) animate ? this.tweens.add({ targets, alpha: 1, duration: 600 }) : targets.forEach(t => t.setAlpha(1));
 
         const cloud = this.fogCloudsMap.get(nodeId);
@@ -392,8 +399,8 @@ export class MainScene extends Phaser.Scene {
     private revealEdgesFrom(nodeId: number, animate: boolean): void {
         this.graph.find(n => n.id === nodeId)?.neighbors.forEach(edge => {
             const graphic = this.edgeGraphicsMap.get(`${nodeId}-${edge.targetId}`);
-            if (graphic && (graphic as any).alpha === 0) {
-                animate ? this.tweens.add({ targets: graphic, alpha: 1, duration: 600 }) : (graphic as any).setAlpha(1);
+            if (graphic && graphic.alpha === 0) {
+                animate ? this.tweens.add({ targets: graphic, alpha: 1, duration: 600 }) : graphic.setAlpha(1);
             }
             this.revealNode(edge.targetId, animate);
         });
@@ -462,7 +469,7 @@ export class MainScene extends Phaser.Scene {
         this.registry.set('resources', this.currentResources = nextResources);
 
         const targetNode = this.graph.find(n => n.id === targetNodeId)!;
-        const triggerChase = isTrapTrigger || (edge as any).isChase;
+        const triggerChase = isTrapTrigger || edge.isChase;
 
         if (edge.pathNodes?.length) {
             if (triggerChase) {
@@ -506,7 +513,7 @@ export class MainScene extends Phaser.Scene {
                 return this.handleMoveCompletion(targetNode.id, targetNode);
             }
             const pt = path[i], prev = i > 0 ? path[i - 1] : this.puppy;
-            if (Math.abs(pt.x - (prev as any).x) > 2) this.puppy.setFlipX(pt.x < (prev as any).x);
+            if (Math.abs(pt.x - prev.x) > 2) this.puppy.setFlipX(pt.x < prev.x);
             const dist = Phaser.Math.Distance.Between(this.puppy.x, this.puppy.y, pt.x, pt.y);
             dist < 2 ? moveStep(i + 1) : this.tweens.add({ targets: this.puppy, x: pt.x, y: pt.y, duration: dist * 4, ease: 'Linear', onComplete: () => moveStep(i + 1) });
         };
@@ -534,6 +541,11 @@ export class MainScene extends Phaser.Scene {
         }
         if (this.isFogOfWar) this.revealEdgesFrom(targetNodeId, true);
         this.isMoving = false;
+
+        if (this.currentResources.time < 0 || this.currentResources.stamina < 0) {
+            return this.triggerDefeat(this.currentResources.time < 0 ? 'time' : 'stamina');
+        }
+        if (this.currentNodeId === this.catNodeId) return this.triggerDefeat('cat');
 
         if (this.currentNodeId === this.level.goalNodeId && this.currentResources.bones >= 1) {
             this.registry.set('finalResources', { ...this.currentResources });
@@ -632,7 +644,7 @@ export class MainScene extends Phaser.Scene {
         }[reason];
         const mb = this.energyGameResult?.minBudget;
         const optLine = mb
-            ? `Optimal route: ⏰ ${mb.time} time  ❤️ ${mb.stamina} stamina\n(You started with ⏰ ${this.level.initialResources.time}  ❤️ ${this.level.initialResources.stamina})`
+            ? `Resource estimate: ⏰ ${mb.time} time  ❤️ ${mb.stamina} stamina\n(You started with ⏰ ${this.level.initialResources.time}  ❤️ ${this.level.initialResources.stamina})`
             : '';
         const items: Phaser.GameObjects.GameObject[] = [];
         const bg = this.add.graphics();
@@ -682,11 +694,11 @@ export class MainScene extends Phaser.Scene {
         items.push(this.add.text(cardW / 2 - 36, -cardH / 2 + 8, '🐾', { fontSize: '20px' }));
         items.push(this.add.text(0, -cardH / 2 + 25, this.level.title, { fontSize: '26px', fontStyle: 'bold', color: '#fff8e7', stroke: '#000', strokeThickness: 2 }).setOrigin(0.5));
         items.push(this.add.text(0, -cardH / 2 + 90, 'Collect a bone then guide the puppy home 🏠', { fontSize: '16px', color: '#ffd700', align: 'center', wordWrap: { width: cardW - 40 } }).setOrigin(0.5));
-        items.push(this.add.text(0, -cardH / 2 + 132, '⚠️  If Time or Stamina hits 0, you fail!', { fontSize: '14px', color: '#ff9944', align: 'center' }).setOrigin(0.5));
+        items.push(this.add.text(0, -cardH / 2 + 132, '⚠️  If Time or Stamina falls below 0, you fail!', { fontSize: '14px', color: '#ff9944', align: 'center' }).setOrigin(0.5));
         items.push(this.add.text(0, -cardH / 2 + 170, `Starting:  ⏰ Time ${this.level.initialResources.time}    ❤️ Stamina ${this.level.initialResources.stamina}`, { fontSize: '16px', color: '#d5c5a0', align: 'center' }).setOrigin(0.5));
         const btnBg = this.add.rectangle(0, cardH / 2 - 40, 160, 44, 0x27ae60).setStrokeStyle(2, 0xffffff, 0.7).setInteractive({ useHandCursor: true });
         items.push(btnBg, this.add.text(0, cardH / 2 - 40, "Let's go! 🐾", { fontSize: '18px', fontStyle: 'bold', color: '#fff' }).setOrigin(0.5));
-        const container = this.add.container(cx, cy - 20, items).setDepth(3001).setAlpha(0);
+        const container = this.add.container(cx, cy - 20, items).setName('level-intro').setDepth(3001).setAlpha(0);
         this.tweens.add({ targets: container, alpha: 1, y: cy, duration: 400, ease: 'Back.easeOut' });
         btnBg.once('pointerdown', () => {
             overlay.destroy();
@@ -727,8 +739,8 @@ export class MainScene extends Phaser.Scene {
             
             const toggleTrap = (speed: number, alpha: number) => {
                 if (node.type === NodeType.DEFENDER && !this.triggeredTraps.has(node.id)) {
-                    (obj as any).getData('spikeTween')?.setTimeScale(speed);
-                    (obj as any).getData('coreGfx')?.setAlpha(alpha);
+                    obj.getData('spikeTween')?.setTimeScale(speed);
+                    obj.getData('coreGfx')?.setAlpha(alpha);
                 }
             };
 
@@ -802,8 +814,8 @@ export class MainScene extends Phaser.Scene {
                     const moveSquirrelStep = (i: number) => {
                         if (i >= path.length) return this.safePlay(sq, 'squirrel_idle');
                         const pt = path[i], prev = i > 0 ? path[i - 1] : sq;
-                        if (pt.x < (prev as any).x - 2) sq.setFlipX(false);
-                        else if (pt.x > (prev as any).x + 2) sq.setFlipX(true);
+                        if (pt.x < prev.x - 2) sq.setFlipX(false);
+                        else if (pt.x > prev.x + 2) sq.setFlipX(true);
                         
                         const isLast = i === path.length - 1;
                         const dist = Phaser.Math.Distance.Between(sq.x, sq.y, pt.x + (isLast?35:0), pt.y - (isLast?10:0));
@@ -822,7 +834,7 @@ export class MainScene extends Phaser.Scene {
             const obj = this.nodeGraphicsMap.get(e.targetId);
             if (!obj || (this.isFogOfWar && !this.revealedNodes.has(e.targetId))) return;
             const res = applyEffects(this.currentResources, e.effects, this.level.maxResources);
-            res.time >= 0 && res.stamina >= 0 ? this.activeHints.push(this.createMagicDustEmitter((obj as any).x, (obj as any).y, 0x88ccff)) : (obj instanceof Phaser.GameObjects.Arc && obj.setStrokeStyle(3, 0xff4444, 0.7));
+            res.time >= 0 && res.stamina >= 0 ? this.activeHints.push(this.createMagicDustEmitter(obj.x, obj.y, 0x88ccff)) : (obj instanceof Phaser.GameObjects.Arc && obj.setStrokeStyle(3, 0xff4444, 0.7));
         });
     }
 }

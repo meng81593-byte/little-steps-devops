@@ -28,5 +28,10 @@ export class Game extends Phaser.Game {
 }
 
 window.addEventListener('load', () => {
-    new Game(config);
+    window.littleStepsGame = new Game(config);
 });
+
+// A single runtime handle for browser integration tests and troubleshooting.
+declare global {
+    interface Window { littleStepsGame?: Game; }
+}

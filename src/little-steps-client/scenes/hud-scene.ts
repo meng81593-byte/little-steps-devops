@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import type { MainScene } from './main-scene';
 import { ResourceVector } from '../levels/level-data';
 import { EnergyGameResult, evaluatePerformance } from '../engine/energy-game-engine';
 import { CosmeticsState, COLOR_DEFS, ACCESSORY_DEFS, CLOTH_DEFS, unlockRewardForLevel, saveCosmetics } from '../cosmetics';
@@ -312,7 +313,7 @@ export class HudScene extends Phaser.Scene {
         let stars = 1;
 
         if (initial && final && egResult) {
-            const fb = evaluatePerformance(egResult, initial, final);
+            const fb = evaluatePerformance(egResult, initial, final, this.registry.get('goalReached') === true);
             feedbackLine = fb.message;
             if (fb.rating === 'perfect') { ratingColor = '#ffd700'; stars = 3; }
             else if (fb.rating === 'good') { ratingColor = '#58d68d'; stars = 2; }
@@ -408,7 +409,7 @@ export class HudScene extends Phaser.Scene {
         panelItems.push(this.add.text(0, -panelH / 2 + 32, rewardTitles[levelIndex] ?? '', { fontSize: '20px', fontStyle: 'bold', color: '#FFD700' }).setOrigin(0.5));
         panelItems.push(this.add.text(0, -panelH / 2 + 60, 'Click to select — puppy updates live!', { fontSize: '13px', color: '#c8d3ff' }).setOrigin(0.5));
 
-        const notifyMainScene = () => (this.scene.get('MainScene') as any)?.applyCosmetics?.();
+        const notifyMainScene = () => (this.scene.get('MainScene') as MainScene)?.applyCosmetics();
 
         if (levelIndex === 1) {
             const colors = COLOR_DEFS.filter(c => mutableState.unlockedColors.includes(c.id));
@@ -476,7 +477,7 @@ export class HudScene extends Phaser.Scene {
         const doneTxt = this.add.text(0, panelH / 2 - 36, '✓ Save & Menu', { fontSize: '16px', fontStyle: 'bold', color: '#ffffff' }).setOrigin(0.5);
         panelItems.push(doneBtn, doneTxt);
 
-        let panel: Phaser.GameObjects.Container;
+        const panel = this.add.container(cx, cy, panelItems).setDepth(201).setAlpha(0);
         doneBtn.on('pointerdown', () => {
             overlay.destroy();
             panel.destroy();
@@ -485,7 +486,6 @@ export class HudScene extends Phaser.Scene {
             this.scene.start('MenuScene');
         });
 
-        panel = this.add.container(cx, cy, panelItems).setDepth(201).setAlpha(0);
         this.tweens.add({ targets: panel, alpha: 1, duration: 300, ease: 'Power2' });
     }
 

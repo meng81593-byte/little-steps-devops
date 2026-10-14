@@ -1,216 +1,142 @@
-/**
- * Energy Game Engine
- *
- * Implements the energy game algorithm for computing minimal winning resource
- * budgets. The game is a two-player graph game:
- *   - Max player (puppy / PLAYER+START nodes): chooses edges to minimise cost
- *   - Min player (defender / DEFENDER nodes): chooses edges to maximise cost
- *
- * KEY DESIGN: "bones" is a reachability constraint, not an energy resource.
- * We model it by duplicating the graph into two layers:
- *   - Layer 0: puppy has NOT yet collected a bone
- *   - Layer 1: puppy HAS collected a bone (and can enter GOAL)
- * Transitions between layers happen on nodes/edges that give bones > 0.
- *
- * Algorithm: backward fixed-point iteration on this layered game graph.
- * Ref: LIPIcs CONCUR 2025, doi:10.4230/LIPIcs.CONCUR.2025.29
+/** Backward reachability with Pareto frontiers for time/stamina budgets.
+ * Player choices form a union; defender choices require all successors to win.
+ * Bone acquisition is monotone and represented by two graph layers.
  */
+import { LevelData, GraphNode, NodeType, ResourceEffect, ResourceVector, EdgeData } from '../levels/level-data';
 
-import {
-    LevelData,
-    GraphNode,
-    NodeType,
-    ResourceKey,
-    ResourceEffect,
-    ResourceVector,
-} from '../levels/level-data';
-
-// ─── Energy vectors (time + stamina only) ────────────────────────────────────
-
-const INF = 1e9;
-type EnergyVec = { time: number; stamina: number };
-
-function zero(): EnergyVec { return { time: 0, stamina: 0 }; }
-function inf(): EnergyVec { return { time: INF, stamina: INF }; }
-function vecEqual(a: EnergyVec, b: EnergyVec): boolean { return a.time === b.time && a.stamina === b.stamina; }
-function vecMin(a: EnergyVec, b: EnergyVec): EnergyVec { return { time: Math.min(a.time, b.time), stamina: Math.min(a.stamina, b.stamina) }; }
-function vecMax(a: EnergyVec, b: EnergyVec): EnergyVec { return { time: Math.max(a.time, b.time), stamina: Math.max(a.stamina, b.stamina) }; }
-
-// ─── Effect helpers ───────────────────────────────────────────────────────────
-
-function sumAddEffects(effects: ResourceEffect[] = []): EnergyVec {
-    const d = zero();
-    for (const e of effects) {
-        if (e.op !== 'add') continue;
-        if (e.resource === 'time') d.time += e.value;
-        if (e.resource === 'stamina') d.stamina += e.value;
+export type EnergyVec = { time: number; stamina: number };
+type Frontier = EnergyVec[];
+const dominates = (a: EnergyVec, b: EnergyVec) => a.time <= b.time && a.stamina <= b.stamina;
+const compare = (a: EnergyVec, b: EnergyVec) => a.time - b.time || a.stamina - b.stamina;
+function pareto(candidates: Frontier): Frontier {
+    const result: Frontier = [];
+    for (const budget of candidates.sort(compare)) {
+        if (!result.some(other => dominates(other, budget))) result.push(budget);
     }
-    return d;
+    return result;
 }
-
-function givesBones(effects: ResourceEffect[] = []): boolean {
-    return effects.some(e => e.resource === 'bones' && e.op === 'add' && e.value > 0);
+function reverseEffects(need: EnergyVec, effects: ResourceEffect[] = [], caps: Partial<ResourceVector> = {}): EnergyVec | undefined {
+    const required = { ...need };
+    for (const key of ['time', 'stamina'] as const) {
+        if (caps[key] !== undefined && required[key] > caps[key]) return undefined;
+    }
+    for (const effect of [...effects].reverse()) {
+        if (effect.resource === 'bones') continue;
+        const key = effect.resource;
+        if (effect.op === 'add') required[key] = Math.max(0, required[key] - effect.value);
+        else if (effect.value < required[key]) return undefined;
+        else if (effect.op === 'set') required[key] = 0;
+    }
+    return required;
 }
-
-/**
- * Back-propagate through one step:
- *   before[k] = max(0, need[k] - delta[k])
- */
-function backprop(need: EnergyVec, delta: EnergyVec): EnergyVec {
-    return {
-        time: Math.max(0, need.time - delta.time),
-        stamina: Math.max(0, need.stamina - delta.stamina),
-    };
+function boneAfter(hasBone: boolean, effects: ResourceEffect[] = []): boolean {
+    return hasBone || effects.some(effect => effect.resource === 'bones' && effect.value > 0);
 }
-
-// ─── Layered game graph ───────────────────────────────────────────────────────
-
-type Layer = 0 | 1;
-type PosKey = string;
-function posKey(id: number, layer: Layer): PosKey { return `${id}:${layer}`; }
-
-// ─── Main algorithm ───────────────────────────────────────────────────────────
-
 export type EnergyGameResult = {
     minBudget: ResourceVector | undefined;
+    winningBudgets: Frontier;
     levelWinnable: boolean;
+    initialBudgetSufficient: boolean;
+    converged: boolean;
     nodeWinBudgets: Map<number, EnergyVec>;
     optimalMove: Map<number, number>;
 };
 
 export function computeEnergyGame(level: LevelData): EnergyGameResult {
-    const nodeMap = new Map<number, GraphNode>(level.nodes.map(n => [n.id, n]));
-
-    // Initialise W for both layers
-    // GOAL at layer 1 = zero (won). Everything else = INF.
-    const W = new Map<PosKey, EnergyVec>();
-    for (const n of level.nodes) {
-        W.set(posKey(n.id, 0), inf());
-        W.set(posKey(n.id, 1), n.id === level.goalNodeId ? zero() : inf());
+    const nodes = new Map(level.nodes.map(node => [node.id, node]));
+    if (nodes.size !== level.nodes.length || !nodes.has(level.startNodeId) || !nodes.has(level.goalNodeId)) {
+        throw new Error('Level must have unique node IDs and valid start/goal nodes.');
     }
-
-    // Fixed-point backward iteration
-    let changed = true;
-    let iters = 0;
-    const MAX_ITERS = Math.max(500, level.nodes.length * level.nodes.length * 10);
-
-    while (changed && iters++ < MAX_ITERS) {
-        changed = false;
-
-        for (const node of level.nodes) {
-            for (const layer of [0, 1] as Layer[]) {
-                // GOAL in layer 1 is the absorbing win state
-                if (node.id === level.goalNodeId && layer === 1) continue;
-
-                if (node.neighbors.length === 0) continue;
-
-                // Compute cost of each outgoing edge from (node, layer)
-                const costs: EnergyVec[] = node.neighbors.map(edge => {
-                    const target = nodeMap.get(edge.targetId)!;
-                    const edgeDelta = sumAddEffects(edge.effects);
-                    const nodeDelta = sumAddEffects(target.nodeEffects);
-
-                    // Does this transition give a bone?
-                    const getBone = givesBones(edge.effects) || givesBones(target.nodeEffects);
-                    const targetLayer: Layer = (layer === 1 || getBone) ? 1 : 0;
-
-                    // Need at target after nodeEffects applied
-                    const needAfterNode = W.get(posKey(target.id, targetLayer))!;
-                    // Back-propagate through nodeEffects
-                    const needBeforeNode = backprop(needAfterNode, nodeDelta);
-                    // Back-propagate through edge
-                    return backprop(needBeforeNode, edgeDelta);
-                });
-
-                let newW: EnergyVec;
-                if (node.type === NodeType.DEFENDER) {
-                    newW = costs.reduce((acc, c) => vecMax(acc, c), costs[0]);
-                } else {
-                    newW = costs.reduce((acc, c) => vecMin(acc, c), costs[0]);
-                }
-
-                const pk = posKey(node.id, layer);
-                if (!vecEqual(W.get(pk)!, newW)) {
-                    W.set(pk, newW);
-                    changed = true;
-                }
+    for (const node of level.nodes) {
+        if (node.neighbors.some(edge => !nodes.has(edge.targetId))) throw new Error('Edge target does not exist.');
+        for (const effects of [node.nodeEffects, ...node.neighbors.map(edge => edge.effects)]) {
+            if (effects?.some(effect => !Number.isFinite(effect.value))) throw new Error('Effects must be finite.');
+            if (effects?.some(effect => effect.resource === 'bones' && (effect.op !== 'add' || effect.value < 0))) {
+                throw new Error('Budget analysis requires monotone additive bone acquisition.');
             }
         }
     }
-
-    // Layer-0 budgets for display
-    const nodeWinBudgets = new Map<number, EnergyVec>();
-    for (const n of level.nodes) {
-        nodeWinBudgets.set(n.id, W.get(posKey(n.id, 0))!);
+    const key = (id: number, bone: boolean) => `${id}:${Number(bone)}`;
+    const budgets = new Map<string, Frontier>();
+    for (const node of level.nodes) {
+        budgets.set(key(node.id, false), []);
+        budgets.set(key(node.id, true), node.id === level.goalNodeId ? [{ time: 0, stamina: 0 }] : []);
     }
-
-    // Optimal moves at PLAYER/START nodes in layer 0
+    const edgeBudgets = (node: GraphNode, bone: boolean): Frontier[] => node.neighbors.map(edge => {
+        const target = nodes.get(edge.targetId)!;
+        const nextBone = boneAfter(boneAfter(bone, edge.effects), target.nodeEffects);
+        if (level.maxResources?.bones !== undefined && level.maxResources.bones < 1 && nextBone) return [];
+        return pareto((budgets.get(key(target.id, nextBone)) ?? []).flatMap(need => {
+            const beforeNode = reverseEffects(need, target.nodeEffects, level.maxResources);
+            if (!beforeNode) return [];
+            const beforeEdge = reverseEffects(beforeNode, edge.effects, level.maxResources);
+            if (!beforeEdge) return [];
+            if (level.maxResources?.time !== undefined && beforeEdge.time > level.maxResources.time) return [];
+            if (level.maxResources?.stamina !== undefined && beforeEdge.stamina > level.maxResources.stamina) return [];
+            return [beforeEdge];
+        }));
+    });
+    let converged = false;
+    // Results are sound finite-horizon budgets even if an unusual graph hits this guard.
+    for (let iteration = 0; iteration < 2048; iteration++) {
+        let changed = false;
+        for (const node of level.nodes) for (const bone of [false, true]) {
+            if (node.id === level.goalNodeId && bone) continue;
+            const choices = edgeBudgets(node, bone);
+            let candidates: Frontier;
+            if (choices.length && node.type === NodeType.DEFENDER) {
+                candidates = choices.reduce((all, next) => pareto(all.flatMap(a => next.map(b => ({
+                    time: Math.max(a.time, b.time), stamina: Math.max(a.stamina, b.stamina),
+                })))), [{ time: 0, stamina: 0 }]);
+            } else candidates = pareto(choices.flat());
+            const previous = budgets.get(key(node.id, bone))!;
+            const updated = pareto([...previous, ...candidates]);
+            if (JSON.stringify(updated) !== JSON.stringify(previous)) {
+                budgets.set(key(node.id, bone), updated);
+                changed = true;
+            }
+        }
+        if (!changed) { converged = true; break; }
+    }
+    const startingBone = level.initialResources.bones >= 1;
+    const winningBudgets = budgets.get(key(level.startNodeId, startingBone))!;
+    const affordable = winningBudgets.filter(budget => dominates(budget, level.initialResources));
+    const selected = (affordable.length ? affordable : winningBudgets)[0];
+    const nodeWinBudgets = new Map<number, EnergyVec>();
     const optimalMove = new Map<number, number>();
     for (const node of level.nodes) {
-        if (node.type !== NodeType.PLAYER && node.type !== NodeType.START) continue;
-        if (node.neighbors.length === 0) continue;
-
-        let bestIdx = 0;
-        let bestTime = INF;
-        let bestStamina = INF;
-        for (let i = 0; i < node.neighbors.length; i++) {
-            const edge = node.neighbors[i];
-            const target = nodeMap.get(edge.targetId)!;
-            const edgeDelta = sumAddEffects(edge.effects);
-            const nodeDelta = sumAddEffects(target.nodeEffects);
-            const getBone = givesBones(edge.effects) || givesBones(target.nodeEffects);
-            const targetLayer: Layer = getBone ? 1 : 0;
-            const cost = backprop(backprop(W.get(posKey(target.id, targetLayer))!, nodeDelta), edgeDelta);
-            // Time is the primary metric shown to players; stamina is tiebreaker
-            if (cost.time < bestTime || (cost.time === bestTime && cost.stamina < bestStamina)) {
-                bestTime = cost.time;
-                bestStamina = cost.stamina;
-                bestIdx = i;
-            }
-        }
-        optimalMove.set(node.id, node.neighbors[bestIdx].targetId);
+        const nodeBudget = budgets.get(key(node.id, false))?.[0];
+        if (nodeBudget) nodeWinBudgets.set(node.id, nodeBudget);
+        if (node.type === NodeType.DEFENDER || !nodeBudget) continue;
+        const choices = edgeBudgets(node, false);
+        const move = choices.findIndex(choice => choice.some(budget => dominates(budget, nodeBudget)));
+        if (move >= 0) optimalMove.set(node.id, node.neighbors[move].targetId);
     }
-
-    const startBudget = W.get(posKey(level.startNodeId, 0))!;
-    const isWinnable = startBudget.time < INF && startBudget.stamina < INF;
-    const minBudget: ResourceVector | undefined = isWinnable
-        ? { time: startBudget.time, stamina: startBudget.stamina, bones: 0 }
-        : undefined;
-
-    return { minBudget, levelWinnable: isWinnable, nodeWinBudgets, optimalMove };
+    return {
+        minBudget: selected ? { ...selected, bones: level.initialResources.bones >= 1 ? 1 : 0 } : undefined,
+        winningBudgets,
+        levelWinnable: winningBudgets.length > 0,
+        initialBudgetSufficient: affordable.length > 0,
+        converged,
+        nodeWinBudgets,
+        optimalMove,
+    };
 }
-
-// ─── Performance feedback ─────────────────────────────────────────────────────
 
 export type PerformanceFeedback = {
-    won: boolean;
-    levelWinnable: boolean;
-    timeUsed: number;
-    optimalTime: number;
-    timeSaved: number;
-    message: string;
-    rating: 'perfect' | 'good' | 'ok' | 'loss';
+    won: boolean; levelWinnable: boolean; timeUsed: number; optimalTime: number;
+    timeSaved: number; message: string; rating: 'perfect' | 'good' | 'ok' | 'loss';
 };
-
-export function evaluatePerformance(
-    result: EnergyGameResult,
-    initial: ResourceVector,
-    final: ResourceVector,
-): PerformanceFeedback {
-    const won = final.time >= 0 && final.stamina >= 0 && final.bones >= 1;
-    const timeUsed = initial.time - final.time;
-    const optimalTime = result.minBudget?.time ?? INF;
-
-    if (final.time > 0 && final.stamina > 0) {
-        return { won, levelWinnable: result.levelWinnable, timeUsed, optimalTime, timeSaved: 0, message: 'Perfect route! Arrived with time and stamina to spare 🐾', rating: 'perfect' };
-    }
-
-    const depleted = final.time === 0 && final.stamina === 0
-        ? 'time and stamina'
-        : final.time === 0 ? 'time' : 'stamina';
-    return { won, levelWinnable: result.levelWinnable, timeUsed, optimalTime, timeSaved: 0, message: `Made it home, but ${depleted} ran out! Try a more efficient route 💪`, rating: 'ok' };
+export function evaluatePerformance(result: EnergyGameResult, initial: ResourceVector, final: ResourceVector, reachedGoal = false): PerformanceFeedback {
+    const won = reachedGoal && final.time >= 0 && final.stamina >= 0 && final.bones >= 1;
+    const common = {
+        won, levelWinnable: result.levelWinnable, timeUsed: initial.time - final.time,
+        optimalTime: result.minBudget?.time ?? Infinity, timeSaved: 0,
+    };
+    if (!won) return { ...common, message: 'The puppy has not reached home with a bone and sufficient resources.', rating: 'loss' };
+    if (final.time > 0 && final.stamina > 0) return { ...common, message: 'Arrived with time and stamina to spare!', rating: 'perfect' };
+    return { ...common, message: 'Made it home with exactly enough resources.', rating: 'ok' };
 }
-
 
 export function buildCatChaseGraph(level: LevelData): LevelData {
     if (level.catStartNodeId === undefined) return level;
@@ -232,7 +158,7 @@ export function buildCatChaseGraph(level: LevelData): LevelData {
             const isWin = pNode.id === level.goalNodeId && !isCaught;
 
             // player
-            let pNeighbors = [];
+            let pNeighbors: EdgeData[] = [];
             if (isWin) {
                 pNeighbors = [{ targetId: VIRTUAL_GOAL_ID, effects: [] }];
             } else if (!isCaught) {
@@ -252,7 +178,7 @@ export function buildCatChaseGraph(level: LevelData): LevelData {
             });
 
             // cat
-            let cNeighbors = [];
+            let cNeighbors: EdgeData[] = [];
             if (!isWin && !isCaught) {
                 // after cat modes, player's turn
                 cNeighbors = cNode.neighbors.map(edge => ({

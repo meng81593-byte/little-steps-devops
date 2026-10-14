@@ -1,2 +1,11 @@
 node_modules
 .git
+.claude
+.github
+dist
+tests
+playwright-report
+test-results
+coverage
+*.log
+.env*

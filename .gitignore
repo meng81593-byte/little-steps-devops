@@ -4,7 +4,6 @@ dist
 #General
 #-------------------------------------------------------------------------------
 node_modules
-*.tsx
 yarn.lock
 .vscode
 .idea
@@ -12,3 +11,9 @@ yarn.lock
 #OSX
 #-------------------------------------------------------------------------------
 .DS_STORE
+playwright-report/
+test-results/
+coverage/
+.env
+.env.*
+*.log
