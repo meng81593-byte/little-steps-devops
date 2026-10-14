@@ -6,6 +6,8 @@
 
 A hands-on DevOps portfolio project around **Little Steps Home**, a Phaser browser game in which a puppy must reach home while managing time, stamina, and route choices.
 
+**[Play the HTTPS demo](https://meng81593-byte.github.io/little-steps-devops/)** · [Quality checks](https://github.com/meng81593-byte/little-steps-devops/actions/workflows/quality.yml) · [Verified AWS release](https://github.com/meng81593-byte/little-steps-devops/actions/runs/38591646137)
+
 The application started as a **team project**. My initial contributions were the game concept, page/interface design, route design, visual design, and backgrounds. I subsequently continued updating the project and developed its container and delivery workflow. See [project credits](docs/credits.md) for the contribution boundary and asset licensing status.
 
 ## What this project demonstrates
