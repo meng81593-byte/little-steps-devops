@@ -59,7 +59,7 @@ jobs:
       - name: Stop test container
         if: always()
         run: docker rm -f little-steps || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: browser-test-evidence

@@ -74,7 +74,7 @@ jobs:
           DIGEST=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$GITHUB_SHA" --query 'imageDetails[0].imageDigest' --output text)
           printf '%s\n' "$REGISTRY/$ECR_REPOSITORY@$DIGEST" > image-uri.txt
           cat image-uri.txt >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: immutable-image-reference
           path: image-uri.txt
