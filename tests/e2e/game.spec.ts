@@ -6,7 +6,7 @@ test('production game loads and performs the first tutorial move without browser
     page.on('response', response => {
         if (response.url().includes('/assets/') && response.status() >= 400) failedAssets.push(response.url());
     });
-    for (const asset of ['healthz', 'bundle.js', 'assets/start.png', 'assets/map0.json']) {
+    for (const asset of [process.env.HEALTH_PATH ?? 'healthz', 'bundle.js', 'assets/start.png', 'assets/map0.json']) {
         expect((await request.get(asset)).ok(), asset).toBeTruthy();
     }
     await page.goto('./');
