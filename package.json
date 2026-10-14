@@ -18,7 +18,7 @@
     "typescript-eslint": "^8.71.2",
     "vitest": "^5.0.4",
     "webpack": "^5.102.1",
-    "webpack-cli": "^6.0.1"
+    "webpack-cli": "^7.2.3"
   },
   "dependencies": {
     "phaser": "^3.90.0"
