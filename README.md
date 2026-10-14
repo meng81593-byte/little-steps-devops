@@ -19,6 +19,11 @@ The application started as a **team project**. My initial contributions were the
 
 The application is static. It does not require a backend, database, or runtime AWS API permissions. AWS container deployment is an operations exercise; static hosting is sufficient for a permanent game demo.
 
+## Game preview
+
+![Little Steps menu](docs/images/menu.png)
+![Tutorial after the first move](docs/images/tutorial.png)
+
 ## Architecture
 
 ```mermaid
@@ -83,6 +88,7 @@ The runtime serves only generated assets, listens on a non-root port, and runs a
 - `Dockerfile` and `nginx.conf`: runtime packaging and health endpoint.
 - `.github/workflows/quality.yml`: quality and running-container checks.
 - `.github/workflows/publish.yml`: manually publish a verified immutable ECR image using GitHub OIDC.
+- `.github/workflows/deploy.yml`: deploy a verified digest to the existing ECS experiment, preserving a rollback reference.
 - `docs/`: credits, validation evidence, and operational notes.
 
 ## Analysis limits

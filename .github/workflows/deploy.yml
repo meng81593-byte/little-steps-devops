@@ -1,0 +1,75 @@
+name: Deploy immutable image to ECS demo
+on:
+  workflow_dispatch:
+    inputs:
+      image_uri:
+        description: Verified ECR image URI with @sha256 digest
+        required: true
+        type: string
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: ecs-demo-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AWS_REGION: eu-west-3
+      CLUSTER: little-steps-portfolio
+      SERVICE: little-steps-portfolio
+      IMAGE_URI: ${{ inputs.image_uri }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-3
+          role-session-name: little-steps-deploy
+      - name: Verify image and save rollback reference
+        run: |
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          export EXPECTED_PREFIX="$ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/little-steps-portfolio@sha256:"
+          python - <<'PY'
+          import os, re
+          if not re.fullmatch(re.escape(os.environ['EXPECTED_PREFIX']) + '[a-f0-9]{64}', os.environ['IMAGE_URI']):
+              raise SystemExit('Image must be a digest in this experiment repository')
+          PY
+          DIGEST="${IMAGE_URI##*@}"
+          aws ecr describe-images --repository-name little-steps-portfolio --image-ids imageDigest="$DIGEST" > image-evidence.json
+          CURRENT=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].taskDefinition' --output text)
+          printf '%s\n' "$CURRENT" > previous-task-definition.txt
+          aws ecs describe-task-definition --task-definition "$CURRENT" --query taskDefinition > current-task-definition.json
+          jq --arg image "$IMAGE_URI" 'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy) | .containerDefinitions |= map(if .name == "game" then .image = $image else . end)' current-task-definition.json > task-definition.json
+      - name: Deploy and wait for stability
+        id: deploy
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: task-definition.json
+          service: little-steps-portfolio
+          cluster: little-steps-portfolio
+          wait-for-service-stability: true
+          wait-max-delay-seconds: 15
+      - name: Confirm requested revision and endpoint
+        env:
+          EXPECTED_TASK: ${{ steps.deploy.outputs.task-definition-arn }}
+          DEMO_URL: ${{ vars.DEMO_URL }}
+        run: |
+          ACTIVE=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].taskDefinition' --output text)
+          test "$ACTIVE" = "$EXPECTED_TASK"
+          curl --fail --retry 5 --retry-delay 3 "$DEMO_URL/healthz"
+          curl --fail --silent -o /dev/null "$DEMO_URL/bundle.js"
+          printf 'Verified task: %s\nImage: %s\n' "$ACTIVE" "$IMAGE_URI" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deployment-evidence
+          path: |
+            previous-task-definition.txt
+            current-task-definition.json
+            task-definition.json
+            image-evidence.json
+          retention-days: 7
