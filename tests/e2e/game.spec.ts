@@ -6,10 +6,10 @@ test('production game loads and performs the first tutorial move without browser
     page.on('response', response => {
         if (response.url().includes('/assets/') && response.status() >= 400) failedAssets.push(response.url());
     });
-    for (const asset of ['/healthz', '/bundle.js', '/assets/start.png', '/assets/map0.json']) {
+    for (const asset of ['healthz', 'bundle.js', 'assets/start.png', 'assets/map0.json']) {
         expect((await request.get(asset)).ok(), asset).toBeTruthy();
     }
-    await page.goto('/');
+    await page.goto('./');
     await expect(page.locator('canvas')).toBeVisible();
     await expect.poll(() => page.evaluate(() => window.littleStepsGame?.scene.isActive('MenuScene')), { timeout: 15_000 }).toBe(true);
     await expect.poll(() => page.evaluate(() => window.littleStepsGame?.textures.exists('menu_bg'))).toBe(true);
