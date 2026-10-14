@@ -1,5 +1,5 @@
 # 第一阶段：借用 Node.js 环境把你的 TypeScript 游戏源码编译成网页文件
-FROM node:24-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
