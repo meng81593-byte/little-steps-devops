@@ -46,7 +46,7 @@ jobs:
           BASE_URL: http://127.0.0.1:8081
         run: npm run test:e2e
       - name: Scan runtime image
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: little-steps:verify
           severity: HIGH,CRITICAL
