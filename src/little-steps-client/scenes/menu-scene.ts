@@ -1,7 +1,9 @@
 import Phaser from 'phaser';
 import { LEVELS } from '../levels/index';
 import { loadCosmetics, saveCosmetics, COLOR_DEFS, ACCESSORY_DEFS, CLOTH_DEFS, CosmeticsState } from '../cosmetics';
-import { drawAccessoryOnGfx, drawClothOnGfx } from '../utils/draw-utils';
+import { isLevelUnlocked, completedLevels } from '../progress';
+import { applyPuppyPalette } from '../utils/puppy-palette';
+import { drawPixelPanel, makePixelButton, PIXEL_FONT, PANEL_TEXT } from '../utils/pixel-panel';
 
 export class MenuScene extends Phaser.Scene {
     private levelSelectPanel!: Phaser.GameObjects.Container;
@@ -122,16 +124,12 @@ export class MenuScene extends Phaser.Scene {
         const { width, height } = this.scale;
         const cx = width / 2, cy = height / 2;
 
-        const cosmeticsState = loadCosmetics();
-        const unlockedLevels = new Set([0, 1]);
-        if (cosmeticsState.unlockedColors.length > 1) unlockedLevels.add(2);
-        if (cosmeticsState.unlockedAccessories.some(id => id !== 'none')) unlockedLevels.add(3);
-
+        const completed = completedLevels();
         const DESCRIPTIONS = [
-            'Find your way home.',
-            'Watch your stamina.',
-            'Fog of war awaits.',
-            'Outrun the chasing cat.',
+            'Learn movement and collect a bone.',
+            'Balance time and stamina.',
+            'Explore the drifting mist.',
+            'Outrun the cat and reach home.',
         ];
 
         this.levelSelectPanel = this.add.container(0, 0);
@@ -169,7 +167,7 @@ export class MenuScene extends Phaser.Scene {
 
         LEVELS.forEach((level, index) => {
             const rowCY    = ROW_START_Y + index * ROW_STEP;
-            const unlocked = unlockedLevels.has(index);
+            const unlocked = isLevelUnlocked(index);
 
             // Rounded row
             const rowGfx = this.add.graphics();
@@ -208,8 +206,8 @@ export class MenuScene extends Phaser.Scene {
                 }).setOrigin(1, 0.5)
                 : null;
 
-            const desc = this.add.text(cx - 95, rowCY + 13, DESCRIPTIONS[index], {
-                fontSize: '11px', color: unlocked ? '#5A4030' : '#8A7A68', fontFamily: FONT,
+            const desc = this.add.text(cx - 95, rowCY + 13, !unlocked ? 'Complete the previous trail.' : completed.includes(index) ? 'COMPLETED - play again' : DESCRIPTIONS[index], {
+                fontSize: '10px', color: unlocked ? '#5A4030' : '#8A7A68', fontFamily: FONT,
             }).setOrigin(0, 0.5);
 
             const toAdd: Phaser.GameObjects.GameObject[] = [rowGfx, rowHit, badgeGfx, badgeLabel, levelTitle, desc];
@@ -267,7 +265,7 @@ export class MenuScene extends Phaser.Scene {
         this.optionsPanel = this.add.container(0, 0);
         this.optionsPanel.setDepth(100).setAlpha(0).setVisible(false);
 
-        const C_BORDER = 0x2C1810, C_HEADER = 0x4A2810, C_PANEL = 0xEDD9A3;
+        const C_BORDER = 0x2C1810, C_HEADER = 0x4A2810, C_PANEL = 0xE2E3DE;
         const C_ROW = 0xF5E8C8, C_HOVER = 0xFFD060;
         const FONT = '"Courier New", monospace';
 
@@ -342,6 +340,7 @@ export class MenuScene extends Phaser.Scene {
     }
 
     private startGame(levelIndex: number) {
+        if (!isLevelUnlocked(levelIndex)) return;
         this.bgm?.stop();
         this.cameras.main.fade(300, 0, 0, 0);
         this.cameras.main.once('camerafadeoutcomplete', () => {
@@ -364,7 +363,7 @@ export class MenuScene extends Phaser.Scene {
         this.cosmeticsBtns.clear();
         this.lockedCosmeticKeys.clear();
 
-        const C_BORDER = 0x2C1810, C_HEADER = 0x4A2810, C_PANEL = 0xEDD9A3;
+        const C_BORDER = 0x2C1810, C_HEADER = 0x4A2810, C_PANEL = 0xE2E3DE;
         const FONT = '"Courier New", monospace';
 
         const overlay  = this.add.rectangle(0, 0, width, height, 0x000000, 0.65).setOrigin(0).setInteractive();
@@ -380,10 +379,10 @@ export class MenuScene extends Phaser.Scene {
 
         // ── Preview area ──────────────────────────────────────────────────────
         const prevGfx = this.add.graphics();
-        prevGfx.fillStyle(C_BORDER, 1);
-        prevGfx.fillRoundedRect(cx - 72, cy - 210, 144, 171, 8);
-        prevGfx.fillStyle(0xF5E8C8, 1);
-        prevGfx.fillRoundedRect(cx - 70, cy - 208, 140, 167, 6);
+        drawPixelPanel(prevGfx, 160, 176);
+        prevGfx.setPosition(cx, cy - 123);
+        const ground = this.add.rectangle(cx, cy - 54, 132, 12, 0xcbd6bc);
+        this.cosmeticsPanel.add(ground);
         this.cosmeticsPanel.add(prevGfx);
 
         const PUPPY_Y = cy - 55;
@@ -419,13 +418,21 @@ export class MenuScene extends Phaser.Scene {
                     dot.fillStyle(unlocked ? item.swatch : 0xBAAA90, 1);
                     dot.fillCircle(bx, rowY, 11);
                     this.cosmeticsPanel.add(dot);
+                    const check = this.add.text(bx, rowY - 2, '', { fontFamily: PIXEL_FONT, fontSize: '12px', color: PANEL_TEXT, fontStyle: 'bold' }).setOrigin(0.5);
+                    check.setData('colorId', item.id);
+                    this.cosmeticsPanel.add(check);
+                    if (unlocked) {
+                        const hit = this.add.rectangle(bx, rowY, 32, 32, 0x000000, 0).setInteractive({ useHandCursor: true });
+                        hit.on('pointerdown', () => this.selectCosmetic(catKey, item.id));
+                        this.cosmeticsPanel.add(hit);
+                    }
                 }
 
                 const btn = this.add.text(bx, rowY + (item.swatch !== undefined ? 22 : 0), item.label, {
-                    fontSize: '11px',
+                    fontSize: '12px',
                     color: unlocked ? '#2C1810' : '#7A6A58',
-                    backgroundColor: '#F5E8C8',
-                    padding: { x: 6, y: 3 },
+                    backgroundColor: '#E2E3DE',
+                    padding: { x: 8, y: 5 },
                     fontFamily: FONT,
                 }).setOrigin(0.5);
                 this.cosmeticsPanel.add(btn);
@@ -434,7 +441,7 @@ export class MenuScene extends Phaser.Scene {
 
                 if (unlocked) {
                     btn.setInteractive({ useHandCursor: true });
-                    btn.on('pointerover', () => btn.setBackgroundColor('#FFD060'));
+                    btn.on('pointerover', () => btn.setBackgroundColor('#D8E2CD'));
                     btn.on('pointerout',  () => this.updateCosmeticsHighlights());
                     btn.on('pointerdown', () => this.selectCosmetic(catKey, item.id));
                 }
@@ -487,18 +494,20 @@ export class MenuScene extends Phaser.Scene {
         if (!this.previewPuppy) return;
         const s = this.cosmeticsState;
 
-        const colorDef = COLOR_DEFS.find(d => d.id === s.selectedColor);
-        if (colorDef?.tint != null) this.previewPuppy.setTint(colorDef.tint);
-        else this.previewPuppy.clearTint();
+        applyPuppyPalette(this, this.previewPuppy, s.selectedColor, s.selectedAccessory, s.selectedCloth);
+        this.previewPuppy.play(`puppy-walk-${this.previewPuppy.getData('look')}`);
 
         this.previewClothGfx?.clear();
-        if (this.previewClothGfx) drawClothOnGfx(this.previewClothGfx, s.selectedCloth);
+        
 
         this.previewAccessoryGfx?.clear();
-        if (this.previewAccessoryGfx) drawAccessoryOnGfx(this.previewAccessoryGfx, s.selectedAccessory);
+        
     }
 
     private updateCosmeticsHighlights() {
+        this.cosmeticsPanel?.list.forEach(obj => {
+            if (obj instanceof Phaser.GameObjects.Text && obj.getData('colorId')) obj.setText(obj.getData('colorId') === this.cosmeticsState.selectedColor ? '*' : '');
+        });
         this.cosmeticsBtns.forEach((btn, key) => {
             if (this.lockedCosmeticKeys.has(key)) return;
             const [cat, id] = key.split(':');
@@ -506,7 +515,7 @@ export class MenuScene extends Phaser.Scene {
                 (cat === 'color' && this.cosmeticsState.selectedColor === id) ||
                 (cat === 'acc'   && this.cosmeticsState.selectedAccessory === id) ||
                 (cat === 'cloth' && this.cosmeticsState.selectedCloth === id);
-            btn.setBackgroundColor(selected ? '#FFD060' : '#F5E8C8');
+            btn.setBackgroundColor(selected ? '#CBD6BC' : '#E2E3DE');
         });
     }
 

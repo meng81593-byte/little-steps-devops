@@ -2,8 +2,12 @@ import Phaser from 'phaser';
 import { LEVELS } from '../levels/index';
 import { applyEffects, ResourceVector, ResourceEffect, NodeType, LevelData, GraphNode } from '../levels/level-data';
 import { computeEnergyGame, EnergyGameResult, buildCatChaseGraph } from '../engine/energy-game-engine';
-import { createDefenderTrapIcon, drawAccessoryOnGfx, drawClothOnGfx } from '../utils/draw-utils';
+import { createDefenderTrapIcon } from '../utils/draw-utils';
 import { loadCosmetics, ColorId, AccessoryId, ClothId, COLOR_DEFS } from '../cosmetics';
+import { MistLayer } from '../utils/mist-layer';
+import { drawPixelPanel, PIXEL_FONT, PANEL_TEXT, makePixelButton, drawResourceIcon } from '../utils/pixel-panel';
+import { isLevelUnlocked, completeLevel } from '../progress';
+import { applyPuppyPalette } from '../utils/puppy-palette';
 
 export class MainScene extends Phaser.Scene {
     // --- Core Game Data ---
@@ -22,9 +26,10 @@ export class MainScene extends Phaser.Scene {
     
     // --- UI Elements ---
     private tooltipContainer!: Phaser.GameObjects.Container;
-    private tooltipBg!: Phaser.GameObjects.Rectangle;
+    private tooltipBg!: Phaser.GameObjects.Graphics;
     private tooltipText!: Phaser.GameObjects.Text;
-    
+    private mist?: MistLayer;
+
     // --- State Flags ---
     private isMoving = false;
     private isGameOver = false;
@@ -45,7 +50,6 @@ export class MainScene extends Phaser.Scene {
     private edgeGraphicsMap = new Map<string, Phaser.GameObjects.Graphics>();
     private edgeTextsMap = new Map<string, Phaser.GameObjects.Container>();
     private nodeEffectTextsMap = new Map<number, Phaser.GameObjects.Container>();
-    private fogCloudsMap = new Map<number, Phaser.GameObjects.Image>();
 
     // --- Resource & Logic ---
     private currentResources!: ResourceVector;
@@ -59,7 +63,7 @@ export class MainScene extends Phaser.Scene {
      * Initializes scene data, state flags, and game logic engine
      */
     init(data: { levelIndex: number }): void {
-        this.levelIndex = data.levelIndex ?? 0;
+        this.levelIndex = isLevelUnlocked(data.levelIndex ?? 0) ? (data.levelIndex ?? 0) : 0;
         this.level = LEVELS[this.levelIndex];
 
         // Deep-copy nodes so we can add reverse edges without mutating level data
@@ -87,6 +91,7 @@ export class MainScene extends Phaser.Scene {
         this.catNodeId = this.catSprite = this.squirrel = undefined;
         this.accessoryGfx = this.clothGfx = undefined;
         this.isFogOfWar = this.levelIndex > 1;
+        this.mist = undefined;
 
         // Tutorial step dialogues (levelIndex 0 only)
         this.tutorialDialogues.clear();
@@ -96,12 +101,13 @@ export class MainScene extends Phaser.Scene {
         }
 
         // Compute optimal paths using the engine
-        const graphForEngine = this.level.catStartNodeId !== undefined ? buildCatChaseGraph(this.level) : this.level;
+        const playableLevel = { ...this.level, nodes: this.graph };
+        const graphForEngine = this.level.catStartNodeId !== undefined ? buildCatChaseGraph(playableLevel) : playableLevel;
         this.energyGameResult = computeEnergyGame(graphForEngine);
 
         // Clear all tracking maps/sets for level restart
         [this.revealedNodes, this.triggeredTraps].forEach(s => s.clear());
-        [this.nodeGraphicsMap, this.nodeTextsMap, this.edgeGraphicsMap, this.edgeTextsMap, this.nodeEffectTextsMap, this.fogCloudsMap].forEach(m => m.clear());
+        [this.nodeGraphicsMap, this.nodeTextsMap, this.edgeGraphicsMap, this.edgeTextsMap, this.nodeEffectTextsMap].forEach(m => m.clear());
     }
 
     /**
@@ -130,6 +136,7 @@ export class MainScene extends Phaser.Scene {
      * Helper to safely play animations on a sprite if it exists
      */
     private safePlay(sprite: Phaser.GameObjects.Sprite | null | undefined, key: string): void {
+        if (sprite === this.puppy && (key === 'walk' || key === 'idle')) key = `puppy-${key}-${sprite.getData('look') ?? 'default-none-none'}`;
         if (sprite && this.anims.exists(key) && this.anims.get(key)!.frames.length > 0) sprite.play(key, true);
     }
 
@@ -138,7 +145,6 @@ export class MainScene extends Phaser.Scene {
      */
     create(): void {
         this.createBoneTexture();
-        this.createCloudTexture();
         this.createClockTexture();
         
         // Setup tilemap background
@@ -152,6 +158,7 @@ export class MainScene extends Phaser.Scene {
 
         // Initialize resources
         this.currentResources = { ...this.level.initialResources };
+        this.graph.forEach(node => this.registry.remove(`bone_${node.id}`));
         Object.entries({ resources: this.currentResources, preview: null, goalReached: false, node: this.currentNodeId, energyGameResult: this.energyGameResult, initialResources: { ...this.level.initialResources }, nodeType: this.graph.find(n => n.id === this.currentNodeId)!.type, levelIndex: this.levelIndex }).forEach(([k, v]) => this.registry.set(k, v));
 
         this.scene.launch('HudScene');
@@ -159,6 +166,9 @@ export class MainScene extends Phaser.Scene {
 
         if (this.isFogOfWar) {
             [this.nodeGraphicsMap, this.nodeTextsMap, this.edgeGraphicsMap, this.edgeTextsMap, this.nodeEffectTextsMap].forEach(m => m.forEach(o => (o as any).setAlpha(0)));
+            
+            this.mist = new MistLayer(this, this.scale.width, this.scale.height);
+
             this.revealNode(this.currentNodeId, false);
             this.revealEdgesFrom(this.currentNodeId, false);
         }
@@ -171,7 +181,7 @@ export class MainScene extends Phaser.Scene {
         // Player & Squirrel Animations
         const puppyFrames = this.anims.generateFrameNumbers('puppy_run', { start: 0, end: 3 });
         if (puppyFrames.length > 0) {
-            if (!this.anims.exists('walk')) this.anims.create({ key: 'walk', frames: puppyFrames, frameRate: 4, repeat: -1 });
+            if (!this.anims.exists('walk')) this.anims.create({ key: 'walk', frames: puppyFrames, frameRate: 9, repeat: -1 });
             if (!this.anims.exists('idle')) this.anims.create({ key: 'idle', frames: [{ key: 'puppy_run', frame: 0 }], frameRate: 10 });
         }
         
@@ -215,15 +225,16 @@ export class MainScene extends Phaser.Scene {
 
         // Tooltip Setup
         this.tooltipContainer = this.add.container(0, 0).setDepth(1500).setAlpha(0);
-        this.tooltipBg = this.add.rectangle(0, 0, 200, 50, 0x1a252f, 0.9).setStrokeStyle(2, 0xffffff);
-        this.tooltipText = this.add.text(0, 0, '', { fontSize: '14px', color: '#ffffff', align: 'center', wordWrap: { width: 180 } }).setOrigin(0.5);
+        this.tooltipBg = this.add.graphics();
+        drawPixelPanel(this.tooltipBg, 240, 80);
+        this.tooltipText = this.add.text(0, 0, '', { fontFamily: PIXEL_FONT, fontSize: '14px', fontStyle: 'bold', color: PANEL_TEXT, align: 'center', lineSpacing: 5, wordWrap: { width: 240 } }).setOrigin(0.5);
         this.tooltipContainer.add([this.tooltipBg, this.tooltipText]);
 
         this.highlightPossibleMoves();
 
         // Tutorial Dialogues
         const tutorials = [
-            'Glowing particles mark where you can move.\nClick a highlighted node to take your first step! 🐾',
+            'Ivory corners and a small arrow mark each available stop.\nClick one of these stops to move.',
             'Every move costs Time and Stamina — plan your route carefully!',
             'The map is covered in fog!\nNew paths reveal themselves as you explore.',
             'Watch out! A mischievous cat is on the prowl.\nKeep moving and do not let it catch you!'
@@ -252,15 +263,18 @@ export class MainScene extends Phaser.Scene {
     }
 
 
-    private showDialogue(text: string, onComplete: () => void): void {
+    private showDialogue(text: string, onComplete: () => void, nearPuppy = false): void {
+        this.tweens.killTweensOf(this.tooltipContainer);
+        this.tooltipContainer.setAlpha(0);
+        this.registry.set('preview', null);
         const { width, height } = this.scale;
         const blocker = this.add.rectangle(0, 0, width, height, 0x000000, 0).setOrigin(0).setDepth(3000).setInteractive({ useHandCursor: true });
         const container = this.add.container(width / 2, height + 200).setDepth(3001);
 
-        const msg = this.add.text(0, 0, text, { fontSize: '22px', color: '#ffffff', fontStyle: 'bold', wordWrap: { width: width * 0.8 - 40 } }).setOrigin(0.5);
-        const hint = this.add.text(0, 0, 'tap anywhere to continue', { fontSize: '13px', color: '#aaaaaa' }).setOrigin(0.5);
+        const msg = this.add.text(0, 0, text, { fontFamily: PIXEL_FONT, fontSize: '14px', color: PANEL_TEXT, fontStyle: 'bold', align: 'center', lineSpacing: 5, wordWrap: { width: nearPuppy ? 330 : 510 } }).setOrigin(0.5);
+        const hint = this.add.text(0, 0, 'click to continue', { fontFamily: PIXEL_FONT, fontSize: '13px', color: '#77583E' }).setOrigin(0.5);
 
-        const gap = 10;
+        const gap = 16;
         const totalH = msg.height + gap + hint.height;
         const pad = 20;
         const bgH = totalH + pad * 2;
@@ -268,13 +282,19 @@ export class MainScene extends Phaser.Scene {
         msg.setY(-hint.height / 2 - gap / 2);
         hint.setY(msg.y + msg.height / 2 + gap + hint.height / 2);
 
-        const bg = this.add.rectangle(0, 0, width * 0.8, bgH, 0x000000, 0.8).setStrokeStyle(4, 0xffffff, 1);
+        const bg = this.add.graphics();
+        const cardW = nearPuppy ? 380 : 550;
+        drawPixelPanel(bg, cardW, bgH);
         container.add([bg, msg, hint]);
+        const targetY = nearPuppy
+            ? Phaser.Math.Clamp(this.puppy.y - 110 - bgH / 2, 86 + bgH / 2, height - bgH / 2 - 12)
+            : (this.puppy.y > height - bgH - 112 ? 94 + bgH / 2 : height - bgH / 2 - 12);
+        if (nearPuppy) container.setPosition(Phaser.Math.Clamp(this.puppy.x, cardW / 2 + 12, width - cardW / 2 - 12), targetY + 8).setAlpha(0);
 
-        this.tweens.add({ targets: container, y: height - bgH / 2 - 10, duration: 400, ease: 'Back.easeOut', onComplete: () => {
+        this.tweens.add({ targets: container, y: targetY, alpha: 1, duration: 260, ease: 'Sine.easeOut', onComplete: () => {
             blocker.once('pointerdown', () => {
                 blocker.destroy();
-                this.tweens.add({ targets: container, y: height + 200, alpha: 0, duration: 300, ease: 'Power2', onComplete: () => { container.destroy(); onComplete(); }});
+                this.tweens.add({ targets: container, y: nearPuppy ? targetY - 8 : height + 200, alpha: 0, duration: nearPuppy ? 180 : 300, ease: 'Power2', onComplete: () => { container.destroy(); onComplete(); }});
             });
         }});
     }
@@ -284,20 +304,11 @@ export class MainScene extends Phaser.Scene {
         this.make.graphics({ x: 0, y: 0 }).fillStyle(0xffffff, 1).fillRoundedRect(4, 4, 16, 6, 2).fillCircle(4, 7, 4).fillCircle(4, 11, 4).fillCircle(20, 7, 4).fillCircle(20, 11, 4).generateTexture('bone_icon', 24, 14).destroy();
     }
 
-    private createCloudTexture() {
-        if (this.textures.exists('cloud')) return;
-        this.make.graphics({ x: 0, y: 0 }).fillStyle(0xecf0f1, 1).fillCircle(35, 35, 25).fillCircle(60, 30, 30).fillCircle(85, 35, 25).fillCircle(25, 55, 20).fillCircle(50, 55, 25).fillCircle(75, 55, 25).fillCircle(95, 50, 20).fillCircle(60, 65, 20).generateTexture('cloud', 120, 90).destroy();
-    }
-
     private createClockTexture() {
         if (this.textures.exists('clock')) return;
-        const canvas = document.createElement('canvas');
-        canvas.width = 22;
-        canvas.height = 22;
-        const ctx = canvas.getContext('2d')!;
-        ctx.font = '18px sans-serif';
-        ctx.fillText('⏰', 0, 18);
-        this.textures.addCanvas('clock', canvas);
+        const g = this.make.graphics({ x: 0, y: 0 });
+        drawResourceIcon(g, 'time', 9, 9);
+        g.generateTexture('clock', 18, 18); g.destroy();
     }
 
     private showSweatAnimation(x: number, y: number): void {
@@ -334,45 +345,50 @@ export class MainScene extends Phaser.Scene {
     public applyCosmetics(): void {
         if (!this.puppy) return;
         const state = loadCosmetics();
-        this.applyColor(state.selectedColor);
-        this.applyAccessory(state.selectedAccessory);
-        this.applyCloth(state.selectedCloth);
-    }
-
-    private applyColor(id: ColorId): void {
-        const def = COLOR_DEFS.find(c => c.id === id);
-        if (def?.tint != null) this.puppy.setTint(def.tint);
-        else this.puppy.clearTint();
-    }
-
-    private applyAccessory(id: AccessoryId): void {
-        this.accessoryGfx?.destroy();
-        this.accessoryGfx = undefined;
-        if (id === 'none' || !this.puppy) return;
-        const gfx = this.add.graphics();
-        drawAccessoryOnGfx(gfx, id);
-        this.accessoryGfx = gfx;
-        gfx.setPosition(this.puppy.x, this.puppy.y - 78);
-    }
-
-    private applyCloth(id: ClothId): void {
-        this.clothGfx?.destroy();
-        this.clothGfx = undefined;
-        if (id === 'none' || !this.puppy) return;
-        const gfx = this.add.graphics();
-        drawClothOnGfx(gfx, id);
-        this.clothGfx = gfx;
-        gfx.setPosition(this.puppy.x, this.puppy.y - 35);
+        this.accessoryGfx?.destroy(); this.clothGfx?.destroy();
+        this.accessoryGfx = this.clothGfx = undefined;
+        applyPuppyPalette(this, this.puppy, state.selectedColor, state.selectedAccessory, state.selectedCloth);
     }
 
     update(): void {
         if (!this.puppy?.active) return;
+        const puppyBounds = new Phaser.Geom.Rectangle(this.puppy.x - 36, this.puppy.y - 96, 72, 110);
+        if (this.tooltipContainer?.alpha > 0 && Phaser.Geom.Intersects.RectangleToRectangle(puppyBounds, this.tooltipContainer.getBounds())) {
+            this.tweens.killTweensOf(this.tooltipContainer);
+            this.tooltipContainer.setAlpha(0);
+        }
+        for (const badge of new Set([...this.edgeTextsMap.values(), ...this.nodeEffectTextsMap.values()])) {
+            const box = new Phaser.Geom.Rectangle(badge.x - badge.width / 2 - 4, badge.y - 14, badge.width + 8, 28);
+            badge.setVisible(!Phaser.Geom.Intersects.RectangleToRectangle(puppyBounds, box));
+        }
         if (this.accessoryGfx?.active) this.accessoryGfx.setPosition(this.puppy.x, this.puppy.y - 78);
         if (this.clothGfx?.active) this.clothGfx.setPosition(this.puppy.x, this.puppy.y - 35);
     }
 
-    private createMagicDustEmitter(x: number, y: number, color: number) {
-        return this.add.particles(x, y, 'white_dot', { speed: { min: 10, max: 25 }, gravityY: -5, emitZone: { type: 'random', source: new Phaser.Geom.Circle(0, 0, 12) }, scale: { start: 0, end: 0.8 }, alpha: { start: 0, end: 1 }, lifespan: { min: 1000, max: 2500 }, frequency: 40, quantity: 1, tint: color, blendMode: 'ADD' }).setDepth(100);
+    private createUnavailableMarker(x: number, y: number): Phaser.GameObjects.Graphics {
+        const g = this.add.graphics().setPosition(x, y).setDepth(41);
+        // A quiet trail lock replaces the large red ring; the stop stays visible.
+        g.fillStyle(0x685c49, 0.72).fillRect(-6, -3, 12, 10);
+        g.lineStyle(2, 0x685c49, 0.72).strokeRect(-4, -9, 8, 7);
+        g.fillStyle(0xd9cdb2).fillRect(-4, -1, 8, 6);
+        g.fillStyle(0x685c49).fillRect(-1, 0, 2, 3);
+        return g;
+    }
+
+    private createMoveMarker(x: number, y: number): Phaser.GameObjects.Container {
+        const ring = this.add.graphics();
+        ring.fillStyle(0x496c47, 0.16).fillRect(-24, -17, 48, 34);
+        ring.lineStyle(3, 0xf5eed2, 1);
+        for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+            ring.beginPath().moveTo(sx * 24, sy * 9).lineTo(sx * 24, sy * 17).lineTo(sx * 16, sy * 17).strokePath();
+        }
+        const arrow = this.add.graphics();
+        arrow.fillStyle(0x4a663e).fillRect(-5, -37, 10, 5).fillRect(-3, -32, 6, 3).fillRect(-1, -29, 2, 2);
+        arrow.fillStyle(0xf5eed2).fillRect(-3, -36, 6, 3);
+        const marker = this.add.container(x, y, [ring, arrow]).setDepth(41);
+        const pulse = this.tweens.add({ targets: arrow, y: -4, duration: 650, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+        marker.once('destroy', () => pulse.stop());
+        return marker;
     }
 
     private revealNode(nodeId: number, animate: boolean): void {
@@ -382,15 +398,15 @@ export class MainScene extends Phaser.Scene {
         const targets = [this.nodeGraphicsMap.get(nodeId), this.nodeTextsMap.get(nodeId), this.nodeEffectTextsMap.get(nodeId)].filter(Boolean) as any[];
         if (targets.length) animate ? this.tweens.add({ targets, alpha: 1, duration: 600 }) : targets.forEach(t => t.setAlpha(1));
 
-        const cloud = this.fogCloudsMap.get(nodeId);
-        if (cloud) {
-            animate ? this.tweens.add({ targets: cloud, alpha: 0, scale: 1.5, duration: 800, ease: 'Power2', onComplete: () => cloud.destroy() }) : cloud.destroy();
-            this.fogCloudsMap.delete(nodeId);
-        }
+        const node = this.graph.find(n => n.id === nodeId);
+        if (node) this.mist?.reveal(nodeId, node.x, node.y, animate);
     }
 
     private revealEdgesFrom(nodeId: number, animate: boolean): void {
-        this.graph.find(n => n.id === nodeId)?.neighbors.forEach(edge => {
+        const source = this.graph.find(n => n.id === nodeId);
+        source?.neighbors.forEach(edge => {
+            const target = this.graph.find(n => n.id === edge.targetId)!;
+            this.mist?.revealPath(nodeId, target.id, this.getMovementPath(source, target, edge.pathNodes), animate);
             const graphic = this.edgeGraphicsMap.get(`${nodeId}-${edge.targetId}`);
             if (graphic && (graphic as any).alpha === 0) {
                 animate ? this.tweens.add({ targets: graphic, alpha: 1, duration: 600 }) : (graphic as any).setAlpha(1);
@@ -405,45 +421,54 @@ export class MainScene extends Phaser.Scene {
      */
     private createEffectBars(x: number, y: number, effects: ResourceEffect[] | undefined) {
         if (!effects?.length) return null;
-        const container = this.add.container(x, y).setDepth(5);
+        const cells = effects.map(eff => {
+            const prefix = eff.op === 'add' ? (eff.value >= 0 ? '+' : '-') : eff.op === 'set' ? '=' : '<';
+            return { eff, label: `${prefix}${Math.abs(eff.value)}` };
+        });
+        const widths = cells.map(c => 20 + c.label.length * 7);
+        const width = widths.reduce((a, b) => a + b, 0) + 8;
+        const container = this.add.container(x, y).setDepth(42).setSize(width, 20);
         const g = this.add.graphics();
+        g.fillStyle(0x49382c, 0.16).fillRect(-width / 2 + 1, -8, width, 20);
+        g.fillStyle(0x795b40, 0.65).fillRect(-width / 2, -10, width, 20);
+        g.fillStyle(0xe2e3de, 0.93).fillRect(-width / 2 + 1, -9, width - 2, 18);
         container.add(g);
-        
-        effects.forEach((eff, i) => {
-            const rowHeight = 16;
-            const oy = (-effects.length * rowHeight) / 2 + (rowHeight / 2) + i * rowHeight;
-
-            if (eff.resource === 'bones') {
-                g.fillStyle(0x1a252f, 0.8).fillRoundedRect(-24, oy - 8, 48, 16, 4);
-                container.add([
-                    this.add.image(-10, oy, 'bone_icon').setScale(1.1).setOrigin(0.5),
-                    this.add.text(4, oy, `+${eff.value}`, { fontSize: '11px', fontStyle: 'bold', color: '#fff', stroke: '#000', strokeThickness: 2 }).setOrigin(0, 0.5)
-                ]);
-            } else {
-                const isTime = eff.resource === 'time';
-                const textureKey = isTime ? 'clock' : 'heart';
-                const numColor = isTime ? '#f1c40f' : '#2ecc71';
-                const isCost = eff.value < 0;
-                const absVal = Math.abs(eff.value);
-
-                const iconWidth = 14;
-                const frame = this.textures.getFrame(textureKey);
-                const scale = iconWidth / (frame ? frame.width : 20);
-                const textStr = `${isCost ? '-' : '+'}${absVal}`;
-                const totalWidth = iconWidth + 22;
-                const startX = -totalWidth / 2;
-
-                g.fillStyle(0x1a252f, 0.8).fillRoundedRect(startX - 4, oy - 8, totalWidth + 8, 16, 4);
-
-                container.add([
-                    this.add.image(startX, oy, textureKey).setOrigin(0, 0.5).setScale(scale),
-                    this.add.text(startX + iconWidth + 2, oy, textStr, {
-                        fontSize: '11px', fontStyle: 'bold', color: numColor, stroke: '#000', strokeThickness: 2
-                    }).setOrigin(0, 0.5)
-                ]);
-            }
+        let cursor = -width / 2 + 4;
+        cells.forEach(({ eff, label }, i) => {
+            drawResourceIcon(g, eff.resource, cursor + 7, 0);
+            container.add(this.add.text(cursor + 17, 0, label, {
+                fontFamily: PIXEL_FONT, fontSize: '11px', fontStyle: 'bold',
+                color: eff.value > 0 ? '#4A6842' : PANEL_TEXT,
+            }).setOrigin(0, 0.5));
+            cursor += widths[i];
         });
         return container;
+    }
+
+    /** Place badges outside every character-sized map stop, then avoid the moving puppy. */
+    private arrangeMapBadges(): void {
+        const placed: Phaser.Geom.Rectangle[] = [];
+        const badges = [...new Set([...this.nodeEffectTextsMap.values(), ...this.edgeTextsMap.values()])];
+        const occupied = this.graph.map(n => new Phaser.Geom.Rectangle(n.x - 33, n.y - 94, 66, 106));
+        occupied.push(new Phaser.Geom.Rectangle(8, 8, 310, 72));
+        badges.forEach(badge => {
+            const homeX = badge.x, homeY = badge.y;
+            const offsets = [[0, 0], [0, -28], [0, 28], [-60, 0], [60, 0], [0, -56], [0, 56], [-90, -28], [90, -28]];
+            for (const [dx, dy] of offsets) {
+                const box = new Phaser.Geom.Rectangle(homeX + dx - badge.width / 2 - 4, homeY + dy - 14, badge.width + 8, 28);
+                if (box.x < 8 || box.right > this.scale.width - 8 || box.y < 8 || box.bottom > this.scale.height - 8) continue;
+                if ([...occupied, ...placed].some(r => Phaser.Geom.Intersects.RectangleToRectangle(r, box))) continue;
+                badge.setPosition(homeX + dx, homeY + dy);
+                placed.push(box);
+                return;
+            }
+            // Leave an unplaceable badge available without ever covering the puppy.
+            badge.setData('avoidPuppy', true);
+        });
+    }
+
+    private getMovementPath(source: { x: number; y: number }, target: { x: number; y: number }, points?: { x: number; y: number }[]): { x: number; y: number }[] {
+        return [{ x: source.x, y: source.y }, ...(points?.slice(1, -1) ?? []), { x: target.x, y: target.y }];
     }
 
     private moveToNextNode(targetNodeId: number, isTrapTrigger = false): void {
@@ -456,7 +481,9 @@ export class MainScene extends Phaser.Scene {
 
         this.activeHints.forEach(h => h?.destroy());
         this.activeHints = [];
+        this.tweens.killTweensOf(this.tooltipContainer);
         this.tooltipContainer.setAlpha(0);
+        this.registry.set('preview', null);
         if (nextResources.stamina < this.currentResources.stamina) this.showSweatAnimation(this.puppy.x, this.puppy.y - 30);
         this.isMoving = true;
         this.registry.set('resources', this.currentResources = nextResources);
@@ -464,26 +491,27 @@ export class MainScene extends Phaser.Scene {
         const targetNode = this.graph.find(n => n.id === targetNodeId)!;
         const triggerChase = isTrapTrigger || (edge as any).isChase;
 
+        const movementPath = this.getMovementPath(this.puppy, targetNode, edge.pathNodes);
         if (edge.pathNodes?.length) {
             if (triggerChase) {
                 this.squirrel = this.add.sprite(this.puppy.x, this.puppy.y, 'squirrel_img').setScale(1.5).setDepth(10).setOrigin(0.5, 0.9);
-                this.moveSquirrelStep(edge.pathNodes, 1, () => {});
-                this.time.delayedCall(400, () => this.moveAlongPath(edge.pathNodes!, targetNode, true));
+                this.moveSquirrelStep(movementPath, 1, () => {});
+                this.time.delayedCall(400, () => this.moveAlongPath(movementPath, targetNode, true));
             } else {
-                this.moveAlongPath(edge.pathNodes, targetNode, false);
+                this.moveAlongPath(movementPath, targetNode, false);
             }
         } else {
             if (triggerChase) {
                 this.squirrel = this.add.sprite(this.puppy.x, this.puppy.y, 'squirrel_img').setScale(1.5).setDepth(10).setOrigin(0.5, 0.9);
                 this.safePlay(this.squirrel.setFlipX(targetNode.x < this.squirrel.x), 'squirrel_run');
-                this.tweens.add({ targets: this.squirrel, x: targetNode.x, y: targetNode.y, duration: 750, onComplete: () => this.safePlay(this.squirrel, 'squirrel_idle') });
+                this.tweens.add({ targets: this.squirrel, x: targetNode.x, y: targetNode.y, duration: Phaser.Math.Distance.Between(this.squirrel.x, this.squirrel.y, targetNode.x, targetNode.y) * 3.2, ease: 'Linear', onComplete: () => this.safePlay(this.squirrel, 'squirrel_idle') });
                 this.time.delayedCall(200, () => {
                     this.safePlay(this.puppy.setFlipX(targetNode.x < this.puppy.x), 'walk');
-                    this.tweens.add({ targets: this.puppy, x: targetNode.x, y: targetNode.y, duration: 1200, ease: 'Power2', onComplete: () => { this.squirrel?.destroy(); this.handleMoveCompletion(targetNodeId, targetNode); } });
+                    this.tweens.add({ targets: this.puppy, x: targetNode.x, y: targetNode.y, duration: Phaser.Math.Distance.Between(this.puppy.x, this.puppy.y, targetNode.x, targetNode.y) * 4, ease: 'Linear', onComplete: () => { this.squirrel?.destroy(); this.handleMoveCompletion(targetNodeId, targetNode); } });
                 });
             } else {
                 this.safePlay(this.puppy.setFlipX(targetNode.x < this.puppy.x), 'walk');
-                this.tweens.add({ targets: this.puppy, x: targetNode.x, y: targetNode.y, duration: 1200, ease: 'Power2', onComplete: () => this.handleMoveCompletion(targetNodeId, targetNode) });
+                this.tweens.add({ targets: this.puppy, x: targetNode.x, y: targetNode.y, duration: Phaser.Math.Distance.Between(this.puppy.x, this.puppy.y, targetNode.x, targetNode.y) * 4, ease: 'Linear', onComplete: () => this.handleMoveCompletion(targetNodeId, targetNode) });
             }
         }
     }
@@ -496,7 +524,7 @@ export class MainScene extends Phaser.Scene {
         }
         const pt = path[index];
         this.safePlay(this.squirrel.setFlipX(pt.x < this.squirrel.x), 'squirrel_run');
-        this.tweens.add({ targets: this.squirrel, x: pt.x, y: pt.y, duration: Phaser.Math.Distance.Between(this.squirrel.x, this.squirrel.y, pt.x, pt.y) * 4, onComplete: () => this.moveSquirrelStep(path, index + 1, onComplete) });
+        this.tweens.add({ targets: this.squirrel, x: pt.x, y: pt.y, duration: Phaser.Math.Distance.Between(this.squirrel.x, this.squirrel.y, pt.x, pt.y) * 3.2, ease: 'Linear', onComplete: () => this.moveSquirrelStep(path, index + 1, onComplete) });
     }
 
     private moveAlongPath(path: { x: number, y: number }[], targetNode: GraphNode, isChase: boolean = false): void {
@@ -519,7 +547,7 @@ export class MainScene extends Phaser.Scene {
         this.previousDogNodeId = this.currentNodeId;
         this.registry.set('node', this.currentNodeId = targetNodeId);
         this.dogTrail.push(targetNodeId);
-        this.registry.set('nodeType', targetNode.type);
+        this.registry.set('nodeType', targetNode.type === NodeType.DEFENDER && this.triggeredTraps.has(targetNode.id) ? NodeType.PLAYER : targetNode.type);
 
         if (targetNode.nodeEffects?.length) {
             this.registry.set('resources', this.currentResources = applyEffects(this.currentResources, targetNode.nodeEffects, this.level.maxResources));
@@ -537,6 +565,7 @@ export class MainScene extends Phaser.Scene {
 
         if (this.currentNodeId === this.level.goalNodeId && this.currentResources.bones >= 1) {
             this.registry.set('finalResources', { ...this.currentResources });
+            completeLevel(this.levelIndex);
             this.registry.set('goalReached', true);
             this.highlightPossibleMoves();
             this.triggerVictory();
@@ -596,7 +625,7 @@ export class MainScene extends Phaser.Scene {
         const targetNode = this.graph.find(n => n.id === bestTarget)!;
         const animToPlay = this.levelIndex === 3 ? 'cat_walk' : 'walk';
         this.safePlay(this.catSprite.setFlipX(targetNode.x < this.catSprite.x), animToPlay);
-        this.tweens.add({ targets: this.catSprite, x: targetNode.x, y: targetNode.y, duration: 400, ease: 'Linear', onComplete: () => {
+        this.tweens.add({ targets: this.catSprite, x: targetNode.x, y: targetNode.y, duration: Phaser.Math.Clamp(Phaser.Math.Distance.Between(this.catSprite.x, this.catSprite.y, targetNode.x, targetNode.y) * 2.5, 220, 650), ease: 'Linear', onComplete: () => {
             this.catSprite?.stop();
             this.catNodeId = bestTarget;
             this.isCatMoving = false;
@@ -605,6 +634,9 @@ export class MainScene extends Phaser.Scene {
     }
 
     private triggerVictory(): void {
+        this.tweens.killTweensOf(this.tooltipContainer);
+        this.tooltipContainer.setAlpha(0);
+        this.registry.set('preview', null);
         this.isGameOver = true;
         this.tweens.add({ targets: this.puppy, y: this.puppy.y - 30, yoyo: true, repeat: -1, duration: 300, ease: 'Sine.easeInOut' });
     }
@@ -630,26 +662,23 @@ export class MainScene extends Phaser.Scene {
             stamina: { header: '❤️ Stamina Depleted!',   body: 'You exhausted all your stamina.\nLook for cheaper paths!',            border: 0x8e44ad, icon: '❤️' },
             cat:     { header: '😿 Caught by the Cat!', body: 'The cat intercepted you!\nMove faster or find a safer route.',        border: 0xd35400, icon: '😿' }
         }[reason];
-        const mb = this.energyGameResult?.minBudget;
+        const mb = this.level.catStartNodeId === undefined ? this.energyGameResult?.minBudget : undefined;
         const optLine = mb
-            ? `Optimal route: ⏰ ${mb.time} time  ❤️ ${mb.stamina} stamina\n(You started with ⏰ ${this.level.initialResources.time}  ❤️ ${this.level.initialResources.stamina})`
+            ? `Guaranteed budget: ⏰ ${mb.time} time  ❤️ ${mb.stamina} stamina\n(You started with ⏰ ${this.level.initialResources.time}  ❤️ ${this.level.initialResources.stamina})`
             : '';
         const items: Phaser.GameObjects.GameObject[] = [];
         const bg = this.add.graphics();
-        bg.fillStyle(0x1e1230, 0.97);
-        bg.fillRoundedRect(-cardW / 2, -cardH / 2, cardW, cardH, r);
-        bg.lineStyle(3, info.border, 1);
-        bg.strokeRoundedRect(-cardW / 2, -cardH / 2, cardW, cardH, r);
+        drawPixelPanel(bg, cardW, cardH);
         items.push(bg);
         const headerBand = this.add.graphics();
-        headerBand.fillStyle(info.border, 0.2);
+        headerBand.fillStyle(0xc7cdbc, 0.7);
         headerBand.fillRoundedRect(-cardW / 2, -cardH / 2, cardW, 52, { tl: r, tr: r, bl: 0, br: 0 });
         items.push(headerBand);
         items.push(this.add.text(-cardW / 2 + 12, -cardH / 2 + 8, info.icon, { fontSize: '22px' }));
         items.push(this.add.text(cardW / 2 - 38, -cardH / 2 + 8, info.icon, { fontSize: '22px' }));
-        items.push(this.add.text(0, -cardH / 2 + 26, info.header, { fontSize: '24px', fontStyle: 'bold', color: '#fff8e7', align: 'center', stroke: '#000', strokeThickness: 2 }).setOrigin(0.5));
-        items.push(this.add.text(0, -cardH / 2 + 100, info.body, { fontSize: '15px', color: '#d5c5a0', align: 'center', wordWrap: { width: cardW - 40 } }).setOrigin(0.5));
-        if (optLine) items.push(this.add.text(0, -cardH / 2 + 162, optLine, { fontSize: '14px', color: '#ffaa44', align: 'center', wordWrap: { width: cardW - 40 } }).setOrigin(0.5));
+        items.push(this.add.text(0, -cardH / 2 + 26, info.header, { fontSize: '24px', fontStyle: 'bold', fontFamily: PIXEL_FONT, color: PANEL_TEXT, align: 'center' }).setOrigin(0.5));
+        items.push(this.add.text(0, -cardH / 2 + 100, info.body, { fontSize: '15px', fontFamily: PIXEL_FONT, color: PANEL_TEXT, align: 'center', wordWrap: { width: cardW - 40 } }).setOrigin(0.5));
+        if (optLine) items.push(this.add.text(0, -cardH / 2 + 162, optLine, { fontSize: '14px', fontFamily: PIXEL_FONT, color: '#77583E', align: 'center', wordWrap: { width: cardW - 40 } }).setOrigin(0.5));
         const tryBg = this.add.rectangle(-75, cardH / 2 - 44, 130, 42, 0x27ae60).setStrokeStyle(2, 0xffffff, 0.7).setInteractive({ useHandCursor: true });
         items.push(tryBg, this.add.text(-75, cardH / 2 - 44, 'Try Again', { fontSize: '17px', fontStyle: 'bold', color: '#fff' }).setOrigin(0.5));
         const menuBg = this.add.rectangle(85, cardH / 2 - 44, 130, 42, 0x4a3555).setStrokeStyle(2, 0xffffff, 0.4).setInteractive({ useHandCursor: true });
@@ -662,35 +691,29 @@ export class MainScene extends Phaser.Scene {
 
     private showLevelIntro(onStart: () => void): void {
         const { width: W, height: H } = this.scale;
-        const cx = W / 2, cy = H / 2;
-        const overlay = this.add.rectangle(0, 0, W, H, 0x0a0010, 0.82).setOrigin(0).setDepth(3000).setInteractive();
-        const cardW = Math.min(460, W * 0.85);
-        const cardH = 280;
-        const r = 20;
-        const items: Phaser.GameObjects.GameObject[] = [];
-        const bg = this.add.graphics();
-        bg.fillStyle(0x1e1230, 0.97);
-        bg.fillRoundedRect(-cardW / 2, -cardH / 2, cardW, cardH, r);
-        bg.lineStyle(3, 0xffd700, 1);
-        bg.strokeRoundedRect(-cardW / 2, -cardH / 2, cardW, cardH, r);
-        items.push(bg);
-        const headerBand = this.add.graphics();
-        headerBand.fillStyle(0xffd700, 0.14);
-        headerBand.fillRoundedRect(-cardW / 2, -cardH / 2, cardW, 50, { tl: r, tr: r, bl: 0, br: 0 });
-        items.push(headerBand);
-        items.push(this.add.text(-cardW / 2 + 12, -cardH / 2 + 8, '🐾', { fontSize: '20px' }));
-        items.push(this.add.text(cardW / 2 - 36, -cardH / 2 + 8, '🐾', { fontSize: '20px' }));
-        items.push(this.add.text(0, -cardH / 2 + 25, this.level.title, { fontSize: '26px', fontStyle: 'bold', color: '#fff8e7', stroke: '#000', strokeThickness: 2 }).setOrigin(0.5));
-        items.push(this.add.text(0, -cardH / 2 + 90, 'Collect a bone then guide the puppy home 🏠', { fontSize: '16px', color: '#ffd700', align: 'center', wordWrap: { width: cardW - 40 } }).setOrigin(0.5));
-        items.push(this.add.text(0, -cardH / 2 + 132, '⚠️  If Time or Stamina hits 0, you fail!', { fontSize: '14px', color: '#ff9944', align: 'center' }).setOrigin(0.5));
-        items.push(this.add.text(0, -cardH / 2 + 170, `Starting:  ⏰ Time ${this.level.initialResources.time}    ❤️ Stamina ${this.level.initialResources.stamina}`, { fontSize: '16px', color: '#d5c5a0', align: 'center' }).setOrigin(0.5));
-        const btnBg = this.add.rectangle(0, cardH / 2 - 40, 160, 44, 0x27ae60).setStrokeStyle(2, 0xffffff, 0.7).setInteractive({ useHandCursor: true });
-        items.push(btnBg, this.add.text(0, cardH / 2 - 40, "Let's go! 🐾", { fontSize: '18px', fontStyle: 'bold', color: '#fff' }).setOrigin(0.5));
-        const container = this.add.container(cx, cy - 20, items).setDepth(3001).setAlpha(0);
-        this.tweens.add({ targets: container, alpha: 1, y: cy, duration: 400, ease: 'Back.easeOut' });
+        const overlay = this.add.rectangle(0, 0, W, H, 0x263529, 0.58).setOrigin(0).setDepth(3000).setInteractive();
+        const cardW = 480, cardH = 318;
+        const bg = this.add.graphics(); drawPixelPanel(bg, cardW, cardH);
+        const descriptions = [
+            'Learn the trail: choose a stop, collect a bone, and reach home.',
+            'Choose between a quick tiring route and a slower gentle route.',
+            'Explore the mist. Keep enough time and stamina for the way home.',
+            'Take the bone, use the woodland detour, and stay ahead of the cat.',
+        ];
+        const items: Phaser.GameObjects.GameObject[] = [bg];
+        items.push(this.add.text(0, -122, this.levelIndex === 0 ? 'YOUR FIRST TRAIL' : this.level.title.toUpperCase(), { fontFamily: PIXEL_FONT, fontSize: '22px', fontStyle: 'bold', color: PANEL_TEXT }).setOrigin(0.5));
+        items.push(this.add.text(0, -65, descriptions[this.levelIndex], { fontFamily: PIXEL_FONT, fontSize: '15px', color: PANEL_TEXT, align: 'center', lineSpacing: 6, wordWrap: { width: cardW - 72 } }).setOrigin(0.5));
+        items.push(this.add.text(0, 1, 'Take a bone home. Keep both resources at 0 or above.', { fontFamily: PIXEL_FONT, fontSize: '12px', color: '#77583E', align: 'center', wordWrap: { width: cardW - 72 } }).setOrigin(0.5));
+        const icons = this.add.graphics();
+        drawResourceIcon(icons, 'time', -135, 43); drawResourceIcon(icons, 'stamina', 25, 43); items.push(icons);
+        items.push(this.add.text(-120, 43, `TIME ${this.level.initialResources.time}`, { fontFamily: PIXEL_FONT, fontSize: '14px', fontStyle: 'bold', color: PANEL_TEXT }).setOrigin(0, 0.5));
+        items.push(this.add.text(40, 43, `STAM ${this.level.initialResources.stamina}`, { fontFamily: PIXEL_FONT, fontSize: '14px', fontStyle: 'bold', color: PANEL_TEXT }).setOrigin(0, 0.5));
+        const btnBg = makePixelButton(this, 0, 110, 192, 'START THE TRAIL'); items.push(btnBg);
+        const container = this.add.container(W / 2, H / 2 + 12, items).setDepth(3001).setAlpha(0);
+        this.tweens.add({ targets: container, alpha: 1, y: H / 2, duration: 240, ease: 'Sine.easeOut' });
         btnBg.once('pointerdown', () => {
             overlay.destroy();
-            this.tweens.add({ targets: container, alpha: 0, y: cy - 20, duration: 300, ease: 'Power2', onComplete: () => { container.destroy(); onStart(); } });
+            this.tweens.add({ targets: container, alpha: 0, y: H / 2 - 12, duration: 180, ease: 'Sine.easeIn', onComplete: () => { container.destroy(); onStart(); } });
         });
     }
 
@@ -719,13 +742,8 @@ export class MainScene extends Phaser.Scene {
             const obj = node.type === NodeType.DEFENDER ? createDefenderTrapIcon(this, node.x, node.y, 20).setInteractive(new Phaser.Geom.Circle(0, 0, 24), Phaser.Geom.Circle.Contains) : this.add.circle(node.x, node.y, 24, 0x000, 0).setInteractive({ useHandCursor: true });
             this.nodeGraphicsMap.set(node.id, obj);
             
-            if (this.isFogOfWar) {
-                const cloud = this.add.image(node.x, node.y, 'cloud').setOrigin(0.5).setDepth(40);
-                this.tweens.add({ targets: cloud, x: '+=10', duration: 2000 + Math.random() * 1000, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
-                this.fogCloudsMap.set(node.id, cloud);
-            }
-            
             const toggleTrap = (speed: number, alpha: number) => {
+                if (this.triggeredTraps.has(node.id)) return;
                 if (node.type === NodeType.DEFENDER && !this.triggeredTraps.has(node.id)) {
                     (obj as any).getData('spikeTween')?.setTimeScale(speed);
                     (obj as any).getData('coreGfx')?.setAlpha(alpha);
@@ -733,12 +751,23 @@ export class MainScene extends Phaser.Scene {
             };
 
             obj.on('pointerover', () => {
-                if (this.isTutorialActive || (this.isFogOfWar && !this.revealedNodes.has(node.id))) return;
+                if (this.isTutorialActive || this.isMoving || this.isCatMoving || this.isGameOver || (this.isFogOfWar && !this.revealedNodes.has(node.id))) return;
                 toggleTrap(4, 0.8);
                 
                 const isNeighbor = this.graph.find(n => n.id === this.currentNodeId)?.neighbors.some(e => e.targetId === node.id) ?? false;
                 const tt = node.type === NodeType.DEFENDER && !this.triggeredTraps.has(node.id) ? '🐿️ Squirrel Node:\nThe squirrel picks the hardest path for you!' : node.nodeEffects?.some(e => e.resource === 'bones' && e.value > 0) ? 'Bone Node:\nCollect to increase score.' : (this.levelIndex === 0 && isNeighbor) ? 'Walkable Path:\nClick to move here.' : '';
-                if (tt) this.tooltipText.setText(tt) && this.tooltipBg.setSize(this.tooltipText.width + 20, this.tooltipText.height + 20) && this.tooltipContainer.setPosition(node.x, node.y - 65).setAlpha(1);
+                if (tt) {
+                    this.tooltipText.setText(tt);
+                    const w = this.tooltipText.width + 40, h = this.tooltipText.height + 36;
+                    drawPixelPanel(this.tooltipBg, w, h);
+                    this.tooltipContainer.setPosition(
+                        Phaser.Math.Clamp(node.x + (node.x > this.scale.width / 2 ? -1 : 1) * (w / 2 + 48), w / 2 + 8, this.scale.width - w / 2 - 8),
+                        Phaser.Math.Clamp(node.y - 52, h / 2 + 86, this.scale.height - h / 2 - 8),
+                    );
+                    this.tweens.killTweensOf(this.tooltipContainer);
+                    this.tooltipContainer.setAlpha(0);
+                    this.tweens.add({ targets: this.tooltipContainer, alpha: 1, duration: 140 });
+                }
 
                 if (!this.registry.get('goalReached') && !this.isMoving && !this.isGameOver && !this.isCatMoving) {
                     const edge = this.graph.find(n => n.id === this.currentNodeId)?.neighbors.find(e => e.targetId === node.id);
@@ -746,10 +775,11 @@ export class MainScene extends Phaser.Scene {
                 }
             });
 
-            obj.on('pointerout', () => { if (!this.isTutorialActive) { this.registry.set('preview', null); this.tooltipContainer.setAlpha(0); toggleTrap(1, 0.2); }});
+            obj.on('pointerout', () => { if (!this.isTutorialActive) { this.registry.set('preview', null); this.tweens.killTweensOf(this.tooltipContainer); this.tooltipContainer.setAlpha(0); toggleTrap(1, 0.2); }});
             obj.on('pointerdown', () => { if (!this.isTutorialActive && !(this.isFogOfWar && !this.revealedNodes.has(node.id))) this.moveToNextNode(node.id); });
-            if (node.nodeEffects?.length) this.nodeEffectTextsMap.set(node.id, this.createEffectBars(node.x + (node.nodeLabelOffset?.x ?? 0), node.y - 18 + (node.nodeLabelOffset?.y ?? 0), node.nodeEffects)!);
+            if (node.nodeEffects?.length) this.nodeEffectTextsMap.set(node.id, this.createEffectBars(node.x + (node.nodeLabelOffset?.x ?? 0), node.y - 108, node.nodeEffects)!);
         });
+        this.arrangeMapBadges();
     }
 
     private highlightPossibleMoves(): void {
@@ -762,7 +792,8 @@ export class MainScene extends Phaser.Scene {
             this.edgeTextsMap.get(`${cur.id}-${edge.targetId}`)?.setAlpha(1);
         });;
         
-        if (cur.type === NodeType.DEFENDER) {
+        if (cur.type === NodeType.DEFENDER && !this.triggeredTraps.has(cur.id)) {
+            this.isTutorialActive = true;
             const alert = this.add.text(this.puppy.x, this.puppy.y - 40, '❗', { fontSize: '24px', fontStyle: 'bold' }).setOrigin(0.5).setDepth(30);
             const sq = this.add.sprite(cur.x + 50, cur.y, 'squirrel_img').setOrigin(0.5, 0.9).setDepth(9).setScale(2).setFlipX(true);
             this.safePlay(sq, 'squirrel_idle');
@@ -772,7 +803,7 @@ export class MainScene extends Phaser.Scene {
                 : 'Oh look! A playful squirrel dashed out from the bushes!';
             this.showDialogue(squirrelMsg, () => {
                 alert.destroy();
-                if (this.isMoving || this.isGameOver) return sq.destroy();
+                if (this.isMoving || this.isGameOver) { this.isTutorialActive = false; sq.destroy(); return; }
 
                 const calcEdgeCost = (edge: typeof cur.neighbors[0]) => {
                     const dt = edge.effects?.filter(e => e.op === 'add' && e.resource === 'time').reduce((s, e) => s + e.value, 0) ?? 0;
@@ -787,11 +818,13 @@ export class MainScene extends Phaser.Scene {
                 const nextId = candidates.length ? candidates[Math.floor(Math.random() * candidates.length)].edge.targetId : null;
                 
                 if (nextId !== null) {
-                    if (this.levelIndex === 0) {
-                        this.triggeredTraps.add(cur.id);
-                        const trap = this.nodeGraphicsMap.get(cur.id) as Phaser.GameObjects.Container;
-                        if (trap?.list) trap.getData('spikeTween')?.stop() || this.tweens.add({ targets: trap.list, alpha: 0.2, duration: 400 });
-                    }
+                    this.triggeredTraps.add(cur.id);
+                    this.registry.set('nodeType', NodeType.PLAYER);
+                    const trap = this.nodeGraphicsMap.get(cur.id) as Phaser.GameObjects.Container;
+                    trap?.getData('spikeTween')?.stop();
+                    trap?.setData('consumed', true);
+                    if (trap?.list) this.tweens.add({ targets: trap.list, alpha: 0, duration: 220 });
+                    this.nodeEffectTextsMap.get(cur.id)?.setAlpha(0);
 
                     const edge = cur.neighbors.find(e => e.targetId === nextId)!;
                     const path = edge.pathNodes?.length ? edge.pathNodes : [{ x: this.graph.find(n=>n.id===nextId)!.x, y: this.graph.find(n=>n.id===nextId)!.y }];
@@ -800,7 +833,11 @@ export class MainScene extends Phaser.Scene {
                     this.tweens.killTweensOf(sq);
 
                     const moveSquirrelStep = (i: number) => {
-                        if (i >= path.length) return this.safePlay(sq, 'squirrel_idle');
+                        if (i >= path.length) {
+                            this.safePlay(sq, 'squirrel_idle');
+                            this.tweens.add({ targets: sq, alpha: 0, duration: 250, onComplete: () => sq.destroy() });
+                            return;
+                        }
                         const pt = path[i], prev = i > 0 ? path[i - 1] : sq;
                         if (pt.x < (prev as any).x - 2) sq.setFlipX(false);
                         else if (pt.x > (prev as any).x + 2) sq.setFlipX(true);
@@ -810,9 +847,9 @@ export class MainScene extends Phaser.Scene {
                         dist < 2 ? moveSquirrelStep(i + 1) : this.tweens.add({ targets: sq, x: pt.x + (isLast?35:0), y: pt.y - (isLast?10:0), duration: dist * 5, ease: 'Linear', onComplete: () => moveSquirrelStep(i + 1) });
                     };
                     moveSquirrelStep(0);
-                    this.time.delayedCall(400, () => { this.skipCatMoveOnce = true; this.moveToNextNode(nextId); });
-                } else sq.destroy();
-            }); 
+                    this.time.delayedCall(400, () => { this.isTutorialActive = false; this.skipCatMoveOnce = true; this.moveToNextNode(nextId); });
+                } else { this.isTutorialActive = false; sq.destroy(); }
+            }, true);
             return;
         }
 
@@ -822,7 +859,7 @@ export class MainScene extends Phaser.Scene {
             const obj = this.nodeGraphicsMap.get(e.targetId);
             if (!obj || (this.isFogOfWar && !this.revealedNodes.has(e.targetId))) return;
             const res = applyEffects(this.currentResources, e.effects, this.level.maxResources);
-            res.time >= 0 && res.stamina >= 0 ? this.activeHints.push(this.createMagicDustEmitter((obj as any).x, (obj as any).y, 0x88ccff)) : (obj instanceof Phaser.GameObjects.Arc && obj.setStrokeStyle(3, 0xff4444, 0.7));
+            res.time >= 0 && res.stamina >= 0 ? this.activeHints.push(this.createMoveMarker((obj as any).x, (obj as any).y)) : this.activeHints.push(this.createUnavailableMarker((obj as any).x, (obj as any).y));
         });
     }
 }

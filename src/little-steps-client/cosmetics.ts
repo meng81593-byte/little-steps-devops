@@ -14,11 +14,11 @@ export interface CosmeticsState {
 const KEY = 'little-steps-cosmetics';
 
 export const COLOR_DEFS: { id: ColorId; label: string; tint: number | null; swatch: number }[] = [
-    { id: 'default', label: 'Default',  tint: null,       swatch: 0xF4A261 },
-    { id: 'golden',  label: 'Golden',   tint: 0xFFD700,   swatch: 0xFFD700 },
-    { id: 'brown',   label: 'Brown',    tint: 0xCD853F,   swatch: 0xCD853F },
-    { id: 'snow',    label: 'Snow',     tint: 0xDDEEFF,   swatch: 0xDDEEFF },
-    { id: 'blue',    label: 'Sky Blue', tint: 0x87CEEB,   swatch: 0x87CEEB },
+    { id: 'default', label: 'Default',  tint: null,       swatch: 0xFFF899 },
+    { id: 'golden',  label: 'Golden',   tint: 0xFFD700,   swatch: 0xE7BB53 },
+    { id: 'brown',   label: 'Brown',    tint: 0xCD853F,   swatch: 0xB9895E },
+    { id: 'snow',    label: 'Snow',     tint: 0xDDEEFF,   swatch: 0xEDEEE3 },
+    { id: 'blue',    label: 'Cream',    tint: 0xDBC49B,   swatch: 0xDBC49B },
 ];
 
 export const ACCESSORY_DEFS: { id: AccessoryId; label: string; color: number }[] = [
