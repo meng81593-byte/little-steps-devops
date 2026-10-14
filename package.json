@@ -21,7 +21,7 @@
     "webpack-cli": "^6.0.1"
   },
   "dependencies": {
-    "phaser": "^3.90.0"
+    "phaser": "^4.2.1"
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
