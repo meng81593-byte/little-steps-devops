@@ -35,6 +35,7 @@ function boneAfter(hasBone: boolean, effects: ResourceEffect[] = []): boolean {
 export type EnergyGameResult = {
     minBudget: ResourceVector | undefined;
     winningBudgets: Frontier;
+    nodeWinningBudgets: Map<number, Frontier>;
     levelWinnable: boolean;
     initialBudgetSufficient: boolean;
     converged: boolean;
@@ -102,9 +103,11 @@ export function computeEnergyGame(level: LevelData): EnergyGameResult {
     const winningBudgets = budgets.get(key(level.startNodeId, startingBone))!;
     const affordable = winningBudgets.filter(budget => dominates(budget, level.initialResources));
     const selected = (affordable.length ? affordable : winningBudgets)[0];
+    const nodeWinningBudgets = new Map<number, Frontier>();
     const nodeWinBudgets = new Map<number, EnergyVec>();
     const optimalMove = new Map<number, number>();
     for (const node of level.nodes) {
+        nodeWinningBudgets.set(node.id, budgets.get(key(node.id, false)) ?? []);
         const nodeBudget = budgets.get(key(node.id, false))?.[0];
         if (nodeBudget) nodeWinBudgets.set(node.id, nodeBudget);
         if (node.type === NodeType.DEFENDER || !nodeBudget) continue;
@@ -113,8 +116,9 @@ export function computeEnergyGame(level: LevelData): EnergyGameResult {
         if (move >= 0) optimalMove.set(node.id, node.neighbors[move].targetId);
     }
     return {
-        minBudget: selected ? { ...selected, bones: level.initialResources.bones >= 1 ? 1 : 0 } : undefined,
+        minBudget: selected && converged ? { ...selected, bones: level.initialResources.bones >= 1 ? 1 : 0 } : undefined,
         winningBudgets,
+        nodeWinningBudgets,
         levelWinnable: winningBudgets.length > 0,
         initialBudgetSufficient: affordable.length > 0,
         converged,

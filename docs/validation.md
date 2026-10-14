@@ -14,6 +14,17 @@ The local production browser assertions passed on 14 October 2026 using Chrome: 
 
 ## Verified delivery evidence
 
+### Pixel UI integration, 14 October 2026
+
+The later local integration combines the wood-framed pixel UI and authored trail updates from `save-pixel-ui` with the engineering changes on main at `ed034e7`. Node.js 24 type checks, lint, all twelve existing regression tests, the standalone game checker, and the production build passed. The browser assertions also passed using real pointer input: tutorial introduction, movement, bone acquisition, arrival at home with `(time=15, stamina=10, bones=1)`, saved tutorial completion, and opening the next trail. On this Windows host, browser cleanup did not finish after Playwright reported the test as successful, so the runner was stopped. A complete CI run for this integration remains pending publication.
+
+The checker covers Pareto tradeoffs, defender exits, resource caps, the first three playable trail budgets, the authored cat route, and sequential progression. It is included in the quality, Pages, and image-publication workflows. These local checks validate the integrated source; the AWS and CI records below describe the earlier published release and must not be read as a cloud deployment of this UI integration.
+
+![Integrated tutorial interface](images/pixel-intro.png)
+![Verified tutorial victory](images/pixel-victory.png)
+
+### Earlier published release
+
 - [Quality and running-container checks](https://github.com/meng81593-byte/little-steps-devops/actions/runs/38596968245): dependency audit, lint, strict types, twelve unit tests, production build, browser interaction, non-root Nginx, HTTP assets, container browser interaction, and fixable HIGH/CRITICAL image findings gate passed. Unfixed image vulnerabilities are outside that gate; this is not a claim of zero CVEs in every dependency/image component.
 - [OIDC image publication](https://github.com/meng81593-byte/little-steps-devops/actions/runs/38588609301): commit `7b87c59cb2fd990ec0bc5426cb4e613412a5716f` published to immutable ECR tag and digest `sha256:4a0d13134a03da5990ec23c95bcaf8105e5d61f56574ddfbfc399d0aa5d9461f`.
 - [OIDC ECS release](https://github.com/meng81593-byte/little-steps-devops/actions/runs/38591646137): requested task revision became stable, endpoints passed and the same browser interaction passed against the real AWS URL. Artifacts are retained for seven days; the job logs and permanent repository evidence document the result afterward.

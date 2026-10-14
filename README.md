@@ -24,7 +24,10 @@ The application is static. It does not require a backend, database, or runtime A
 ## Game preview
 
 ![Little Steps menu](docs/images/menu.png)
+![Wood-framed pixel tutorial](docs/images/pixel-intro.png)
 ![Tutorial after the first move](docs/images/tutorial.png)
+
+The updated game keeps its woodland pixel interface, puppy customization, exploration fog, and sequential trail unlocks. The authored rules, route tradeoffs, and research boundaries are documented in [game design notes](GAME_DESIGN.md).
 
 ## Architecture
 
@@ -57,13 +60,14 @@ Open [http://127.0.0.1:8080](http://127.0.0.1:8080). The development server bind
 npm run lint
 npm run typecheck
 npm test
+npm run test:game
 npm audit --audit-level=high
 npm run build
 npx playwright install chromium
 npm run test:e2e
 ```
 
-Playwright starts a local server for the production `dist/` assets. In Linux CI, install browser dependencies using `npx playwright install --with-deps chromium`. Test traces and failure screenshots are retained in CI artifacts.
+The standalone game checker verifies all playable trail budgets, the deterministic chase route, and sequential unlocks. Playwright starts a local server for the production `dist/` assets and plays the tutorial through collecting a bone, reaching home, and opening the next trail. In Linux CI, install browser dependencies using `npx playwright install --with-deps chromium`. Test traces and failure screenshots are retained in CI artifacts.
 
 ## Run the container
 

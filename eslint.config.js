@@ -13,5 +13,6 @@ export default tseslint.config(
             '@typescript-eslint/no-unused-expressions': ['error', { allowShortCircuit: true, allowTernary: true }],
         },
     },
-    { files: ['*.js', '*.ts', 'scripts/**/*.mjs'], languageOptions: { globals: globals.node } },
+    { files: ['scripts/**/*.cjs'], rules: { '@typescript-eslint/no-require-imports': 'off' } },
+    { files: ['*.js', '*.ts', 'scripts/**/*.mjs', 'scripts/**/*.cjs'], languageOptions: { globals: globals.node } },
 );
