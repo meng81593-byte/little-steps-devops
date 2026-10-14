@@ -82,6 +82,7 @@ The runtime serves only generated assets, listens on a non-root port, and runs a
 - `scripts/`: local serving and development tooling.
 - `Dockerfile` and `nginx.conf`: runtime packaging and health endpoint.
 - `.github/workflows/quality.yml`: quality and running-container checks.
+- `.github/workflows/publish.yml`: manually publish a verified immutable ECR image using GitHub OIDC.
 - `docs/`: credits, validation evidence, and operational notes.
 
 ## Analysis limits

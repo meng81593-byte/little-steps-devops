@@ -134,7 +134,7 @@ export class MenuScene extends Phaser.Scene {
             'Outrun the chasing cat.',
         ];
 
-        this.levelSelectPanel = this.add.container(0, 0);
+        this.levelSelectPanel = this.add.container(0, 0).setName('level-select');
         this.levelSelectPanel.setDepth(100).setAlpha(0).setVisible(false);
 
         // Pixel palette

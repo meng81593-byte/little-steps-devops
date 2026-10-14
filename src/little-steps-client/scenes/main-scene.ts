@@ -255,8 +255,8 @@ export class MainScene extends Phaser.Scene {
 
     private showDialogue(text: string, onComplete: () => void): void {
         const { width, height } = this.scale;
-        const blocker = this.add.rectangle(0, 0, width, height, 0x000000, 0).setOrigin(0).setDepth(3000).setInteractive({ useHandCursor: true });
-        const container = this.add.container(width / 2, height + 200).setDepth(3001);
+        const blocker = this.add.rectangle(0, 0, width, height, 0x000000, 0).setName('dialogue-blocker').setOrigin(0).setDepth(3000).setInteractive({ useHandCursor: true });
+        const container = this.add.container(width / 2, height + 200).setName('tutorial-dialogue').setDepth(3001);
 
         const msg = this.add.text(0, 0, text, { fontSize: '22px', color: '#ffffff', fontStyle: 'bold', wordWrap: { width: width * 0.8 - 40 } }).setOrigin(0.5);
         const hint = this.add.text(0, 0, 'tap anywhere to continue', { fontSize: '13px', color: '#aaaaaa' }).setOrigin(0.5);
@@ -373,7 +373,13 @@ export class MainScene extends Phaser.Scene {
     }
 
     private createMagicDustEmitter(x: number, y: number, color: number) {
-        return this.add.particles(x, y, 'white_dot', { speed: { min: 10, max: 25 }, gravityY: -5, emitZone: { type: 'random', source: new Phaser.Geom.Circle(0, 0, 12) }, scale: { start: 0, end: 0.8 }, alpha: { start: 0, end: 1 }, lifespan: { min: 1000, max: 2500 }, frequency: 40, quantity: 1, tint: color, blendMode: 'ADD' }).setDepth(100);
+        const circle = new Phaser.Geom.Circle(0, 0, 12);
+        const source = { getRandomPoint: (point: Phaser.Types.Math.Vector2Like) => {
+            const randomPoint = Phaser.Geom.Circle.Random(circle);
+            point.x = randomPoint.x;
+            point.y = randomPoint.y;
+        } };
+        return this.add.particles(x, y, 'white_dot', { speed: { min: 10, max: 25 }, gravityY: -5, emitZone: { type: 'random', source }, scale: { start: 0, end: 0.8 }, alpha: { start: 0, end: 1 }, lifespan: { min: 1000, max: 2500 }, frequency: 40, quantity: 1, tint: color, blendMode: 'ADD' }).setDepth(100);
     }
 
     private revealNode(nodeId: number, animate: boolean): void {
@@ -692,7 +698,7 @@ export class MainScene extends Phaser.Scene {
         items.push(this.add.text(0, -cardH / 2 + 170, `Starting:  ⏰ Time ${this.level.initialResources.time}    ❤️ Stamina ${this.level.initialResources.stamina}`, { fontSize: '16px', color: '#d5c5a0', align: 'center' }).setOrigin(0.5));
         const btnBg = this.add.rectangle(0, cardH / 2 - 40, 160, 44, 0x27ae60).setStrokeStyle(2, 0xffffff, 0.7).setInteractive({ useHandCursor: true });
         items.push(btnBg, this.add.text(0, cardH / 2 - 40, "Let's go! 🐾", { fontSize: '18px', fontStyle: 'bold', color: '#fff' }).setOrigin(0.5));
-        const container = this.add.container(cx, cy - 20, items).setDepth(3001).setAlpha(0);
+        const container = this.add.container(cx, cy - 20, items).setName('level-intro').setDepth(3001).setAlpha(0);
         this.tweens.add({ targets: container, alpha: 1, y: cy, duration: 400, ease: 'Back.easeOut' });
         btnBg.once('pointerdown', () => {
             overlay.destroy();

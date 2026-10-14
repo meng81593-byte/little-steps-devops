@@ -11,8 +11,8 @@ Meng's initial responsibilities, confirmed by the author:
 
 Subsequent work in this repository includes application updates, multi-stage Docker packaging, GitHub Actions, and the current quality and delivery improvements. Team-developed code should not be presented as solely authored by Meng.
 
-The original team repository and complete collaborator list have not yet been supplied. Preserve the existing Git history and add those references when confirmed.
+Original team repository: [equivio/little-steps](https://github.com/equivio/little-steps). The Git history retained here includes its commit `dc4f4b565ef32e7285119b4d6cf3e355d09b859a` (Feature/level3 rework #42), which was verified in the original public repository. Preserve that history and acknowledge the team's contributions.
 
 ## Code and asset rights
 
-Design contribution and permission to redistribute underlying assets are separate questions. Image, sprite, music, and other third-party asset sources/licenses still need to be inventoried. No blanket license is assigned to team or third-party content without confirming the relevant rights. This repository currently includes no project-wide LICENSE.
+The original team repository publishes an MIT license, copyright (c) 2026 equivio. Its [LICENSE](https://github.com/equivio/little-steps/blob/main/LICENSE) has been preserved here. Any third-party asset-specific terms remain applicable; image, sprite, and music source credits should be retained or added when confirmed.

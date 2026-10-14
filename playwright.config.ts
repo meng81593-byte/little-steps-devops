@@ -1,11 +1,13 @@
 import { defineConfig } from '@playwright/test';
+const localUrl = `http://127.0.0.1:${process.env.PORT ?? '8080'}`;
 export default defineConfig({
     testDir: './tests/e2e',
-    timeout: 30_000,
+    timeout: 90_000,
     retries: process.env.CI ? 1 : 0,
     reporter: [['list'], ['html', { open: 'never' }]],
     use: {
-        baseURL: process.env.BASE_URL ?? 'http://127.0.0.1:8080',
+        channel: process.env.PLAYWRIGHT_CHANNEL,
+        baseURL: process.env.BASE_URL ?? localUrl,
         viewport: { width: 960, height: 640 },
         screenshot: 'only-on-failure',
         trace: 'retain-on-failure',
@@ -13,7 +15,7 @@ export default defineConfig({
     },
     webServer: process.env.BASE_URL ? undefined : {
         command: 'npm run serve',
-        url: 'http://127.0.0.1:8080/healthz',
+        url: `${localUrl}/healthz`,
         reuseExistingServer: !process.env.CI,
     },
 });

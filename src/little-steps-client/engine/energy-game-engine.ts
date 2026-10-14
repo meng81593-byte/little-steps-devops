@@ -2,7 +2,7 @@
  * Player choices form a union; defender choices require all successors to win.
  * Bone acquisition is monotone and represented by two graph layers.
  */
-import { LevelData, GraphNode, NodeType, ResourceEffect, ResourceVector } from '../levels/level-data';
+import { LevelData, GraphNode, NodeType, ResourceEffect, ResourceVector, EdgeData } from '../levels/level-data';
 
 export type EnergyVec = { time: number; stamina: number };
 type Frontier = EnergyVec[];
@@ -158,7 +158,7 @@ export function buildCatChaseGraph(level: LevelData): LevelData {
             const isWin = pNode.id === level.goalNodeId && !isCaught;
 
             // player
-            let pNeighbors = [];
+            let pNeighbors: EdgeData[] = [];
             if (isWin) {
                 pNeighbors = [{ targetId: VIRTUAL_GOAL_ID, effects: [] }];
             } else if (!isCaught) {
@@ -178,7 +178,7 @@ export function buildCatChaseGraph(level: LevelData): LevelData {
             });
 
             // cat
-            let cNeighbors = [];
+            let cNeighbors: EdgeData[] = [];
             if (!isWin && !isCaught) {
                 // after cat modes, player's turn
                 cNeighbors = cNode.neighbors.map(edge => ({
