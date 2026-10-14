@@ -20,12 +20,6 @@ export default {
             { test: /phaser\.js$/, loader: 'expose-loader', options: { exposes: 'phaser' } }
         ]
     },
-    devServer: {
-        host: '127.0.0.1',
-        port: 8080,
-        open: true,
-        watchFiles: ['src/little-steps-client/assets/**/*']
-    },
     resolve: {
         extensions: ['.ts', '.js'],
         alias: {
@@ -39,6 +33,7 @@ export default {
         new CopyPlugin({
             patterns: [
                 { from: path.resolve(__dirname, 'src/little-steps-client/assets'), to: 'assets' },
+                { from: path.resolve(__dirname, 'public/healthz.txt'), to: 'healthz.txt' },
                 { from: path.resolve(__dirname, 'index.html'), to: 'index.html' }
             ]
         })

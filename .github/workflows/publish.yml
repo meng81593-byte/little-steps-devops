@@ -1,0 +1,86 @@
+name: Publish verified image to ECR
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: image-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AWS_REGION: eu-west-3
+      ECR_REPOSITORY: little-steps-portfolio
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: npm }
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:game
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - name: Authenticate with short-lived AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PUBLISH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: little-steps-publish
+      - name: Sign in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build runtime image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          EXISTING=$(aws ecr list-images --repository-name "$ECR_REPOSITORY" --filter tagStatus=TAGGED --query "imageIds[?imageTag=='$GITHUB_SHA'].imageTag" --output text)
+          if [ -n "$EXISTING" ]; then
+            echo 'This immutable commit image already exists. Use a new commit for a new release.'
+            exit 1
+          fi
+          docker build -t "$REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA" .
+      - name: Verify running image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          BASE_URL: http://127.0.0.1:8081
+        run: |
+          docker run -d --name release-check -p 127.0.0.1:8081:8080 "$REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA"
+          test "$(docker exec release-check id -u)" != "0"
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8081/healthz; then break; fi
+            sleep 1
+          done
+          npm run test:e2e
+      - name: Scan release image
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ${{ steps.ecr.outputs.registry }}/little-steps-portfolio:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+      - name: Publish immutable commit version
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          docker push "$REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA"
+          DIGEST=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$GITHUB_SHA" --query 'imageDetails[0].imageDigest' --output text)
+          printf '%s\n' "$REGISTRY/$ECR_REPOSITORY@$DIGEST" > image-uri.txt
+          cat image-uri.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: immutable-image-reference
+          path: image-uri.txt
+          retention-days: 7
+      - name: Cleanup verification container
+        if: always()
+        run: |
+          docker logs release-check || true
+          docker rm -f release-check || true

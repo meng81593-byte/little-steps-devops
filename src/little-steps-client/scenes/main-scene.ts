@@ -3,7 +3,7 @@ import { LEVELS } from '../levels/index';
 import { applyEffects, ResourceVector, ResourceEffect, NodeType, LevelData, GraphNode } from '../levels/level-data';
 import { computeEnergyGame, EnergyGameResult, buildCatChaseGraph } from '../engine/energy-game-engine';
 import { createDefenderTrapIcon } from '../utils/draw-utils';
-import { loadCosmetics, ColorId, AccessoryId, ClothId, COLOR_DEFS } from '../cosmetics';
+import { loadCosmetics } from '../cosmetics';
 import { MistLayer } from '../utils/mist-layer';
 import { drawPixelPanel, PIXEL_FONT, PANEL_TEXT, makePixelButton, drawResourceIcon } from '../utils/pixel-panel';
 import { isLevelUnlocked, completeLevel } from '../progress';
@@ -45,7 +45,7 @@ export class MainScene extends Phaser.Scene {
     private triggeredTraps = new Set<number>();
     
     // --- Visual Asset Maps ---
-    private nodeGraphicsMap = new Map<number, Phaser.GameObjects.GameObject>();
+    private nodeGraphicsMap = new Map<number, Phaser.GameObjects.Arc | Phaser.GameObjects.Container>();
     private nodeTextsMap = new Map<number, Phaser.GameObjects.Text>();
     private edgeGraphicsMap = new Map<string, Phaser.GameObjects.Graphics>();
     private edgeTextsMap = new Map<string, Phaser.GameObjects.Container>();
@@ -165,7 +165,7 @@ export class MainScene extends Phaser.Scene {
         this.drawGraph();
 
         if (this.isFogOfWar) {
-            [this.nodeGraphicsMap, this.nodeTextsMap, this.edgeGraphicsMap, this.edgeTextsMap, this.nodeEffectTextsMap].forEach(m => m.forEach(o => (o as any).setAlpha(0)));
+            [this.nodeGraphicsMap, this.nodeTextsMap, this.edgeGraphicsMap, this.edgeTextsMap, this.nodeEffectTextsMap].forEach(m => m.forEach(o => o.setAlpha(0)));
             
             this.mist = new MistLayer(this, this.scale.width, this.scale.height);
 
@@ -268,8 +268,8 @@ export class MainScene extends Phaser.Scene {
         this.tooltipContainer.setAlpha(0);
         this.registry.set('preview', null);
         const { width, height } = this.scale;
-        const blocker = this.add.rectangle(0, 0, width, height, 0x000000, 0).setOrigin(0).setDepth(3000).setInteractive({ useHandCursor: true });
-        const container = this.add.container(width / 2, height + 200).setDepth(3001);
+        const blocker = this.add.rectangle(0, 0, width, height, 0x000000, 0).setName('dialogue-blocker').setOrigin(0).setDepth(3000).setInteractive({ useHandCursor: true });
+        const container = this.add.container(width / 2, height + 200).setName('tutorial-dialogue').setDepth(3001);
 
         const msg = this.add.text(0, 0, text, { fontFamily: PIXEL_FONT, fontSize: '14px', color: PANEL_TEXT, fontStyle: 'bold', align: 'center', lineSpacing: 5, wordWrap: { width: nearPuppy ? 330 : 510 } }).setOrigin(0.5);
         const hint = this.add.text(0, 0, 'click to continue', { fontFamily: PIXEL_FONT, fontSize: '13px', color: '#77583E' }).setOrigin(0.5);
@@ -395,7 +395,7 @@ export class MainScene extends Phaser.Scene {
         if (this.revealedNodes.has(nodeId)) return;
         this.revealedNodes.add(nodeId);
         
-        const targets = [this.nodeGraphicsMap.get(nodeId), this.nodeTextsMap.get(nodeId), this.nodeEffectTextsMap.get(nodeId)].filter(Boolean) as any[];
+        const targets = [this.nodeGraphicsMap.get(nodeId), this.nodeTextsMap.get(nodeId), this.nodeEffectTextsMap.get(nodeId)].filter((target): target is Phaser.GameObjects.Arc | Phaser.GameObjects.Container | Phaser.GameObjects.Text => target !== undefined);
         if (targets.length) animate ? this.tweens.add({ targets, alpha: 1, duration: 600 }) : targets.forEach(t => t.setAlpha(1));
 
         const node = this.graph.find(n => n.id === nodeId);
@@ -408,8 +408,8 @@ export class MainScene extends Phaser.Scene {
             const target = this.graph.find(n => n.id === edge.targetId)!;
             this.mist?.revealPath(nodeId, target.id, this.getMovementPath(source, target, edge.pathNodes), animate);
             const graphic = this.edgeGraphicsMap.get(`${nodeId}-${edge.targetId}`);
-            if (graphic && (graphic as any).alpha === 0) {
-                animate ? this.tweens.add({ targets: graphic, alpha: 1, duration: 600 }) : (graphic as any).setAlpha(1);
+            if (graphic && graphic.alpha === 0) {
+                animate ? this.tweens.add({ targets: graphic, alpha: 1, duration: 600 }) : graphic.setAlpha(1);
             }
             this.revealNode(edge.targetId, animate);
         });
@@ -489,7 +489,7 @@ export class MainScene extends Phaser.Scene {
         this.registry.set('resources', this.currentResources = nextResources);
 
         const targetNode = this.graph.find(n => n.id === targetNodeId)!;
-        const triggerChase = isTrapTrigger || (edge as any).isChase;
+        const triggerChase = isTrapTrigger || edge.isChase;
 
         const movementPath = this.getMovementPath(this.puppy, targetNode, edge.pathNodes);
         if (edge.pathNodes?.length) {
@@ -534,7 +534,7 @@ export class MainScene extends Phaser.Scene {
                 return this.handleMoveCompletion(targetNode.id, targetNode);
             }
             const pt = path[i], prev = i > 0 ? path[i - 1] : this.puppy;
-            if (Math.abs(pt.x - (prev as any).x) > 2) this.puppy.setFlipX(pt.x < (prev as any).x);
+            if (Math.abs(pt.x - prev.x) > 2) this.puppy.setFlipX(pt.x < prev.x);
             const dist = Phaser.Math.Distance.Between(this.puppy.x, this.puppy.y, pt.x, pt.y);
             dist < 2 ? moveStep(i + 1) : this.tweens.add({ targets: this.puppy, x: pt.x, y: pt.y, duration: dist * 4, ease: 'Linear', onComplete: () => moveStep(i + 1) });
         };
@@ -562,6 +562,11 @@ export class MainScene extends Phaser.Scene {
         }
         if (this.isFogOfWar) this.revealEdgesFrom(targetNodeId, true);
         this.isMoving = false;
+
+        if (this.currentResources.time < 0 || this.currentResources.stamina < 0) {
+            return this.triggerDefeat(this.currentResources.time < 0 ? 'time' : 'stamina');
+        }
+        if (this.currentNodeId === this.catNodeId) return this.triggerDefeat('cat');
 
         if (this.currentNodeId === this.level.goalNodeId && this.currentResources.bones >= 1) {
             this.registry.set('finalResources', { ...this.currentResources });
@@ -664,7 +669,7 @@ export class MainScene extends Phaser.Scene {
         }[reason];
         const mb = this.level.catStartNodeId === undefined ? this.energyGameResult?.minBudget : undefined;
         const optLine = mb
-            ? `Guaranteed budget: ⏰ ${mb.time} time  ❤️ ${mb.stamina} stamina\n(You started with ⏰ ${this.level.initialResources.time}  ❤️ ${this.level.initialResources.stamina})`
+            ? `Resource estimate: ⏰ ${mb.time} time  ❤️ ${mb.stamina} stamina\n(You started with ⏰ ${this.level.initialResources.time}  ❤️ ${this.level.initialResources.stamina})`
             : '';
         const items: Phaser.GameObjects.GameObject[] = [];
         const bg = this.add.graphics();
@@ -708,8 +713,8 @@ export class MainScene extends Phaser.Scene {
         drawResourceIcon(icons, 'time', -135, 43); drawResourceIcon(icons, 'stamina', 25, 43); items.push(icons);
         items.push(this.add.text(-120, 43, `TIME ${this.level.initialResources.time}`, { fontFamily: PIXEL_FONT, fontSize: '14px', fontStyle: 'bold', color: PANEL_TEXT }).setOrigin(0, 0.5));
         items.push(this.add.text(40, 43, `STAM ${this.level.initialResources.stamina}`, { fontFamily: PIXEL_FONT, fontSize: '14px', fontStyle: 'bold', color: PANEL_TEXT }).setOrigin(0, 0.5));
-        const btnBg = makePixelButton(this, 0, 110, 192, 'START THE TRAIL'); items.push(btnBg);
-        const container = this.add.container(W / 2, H / 2 + 12, items).setDepth(3001).setAlpha(0);
+        const btnBg = makePixelButton(this, 0, 110, 192, 'START THE TRAIL').setName('start-trail'); items.push(btnBg);
+        const container = this.add.container(W / 2, H / 2 + 12, items).setName('level-intro').setDepth(3001).setAlpha(0);
         this.tweens.add({ targets: container, alpha: 1, y: H / 2, duration: 240, ease: 'Sine.easeOut' });
         btnBg.once('pointerdown', () => {
             overlay.destroy();
@@ -745,8 +750,8 @@ export class MainScene extends Phaser.Scene {
             const toggleTrap = (speed: number, alpha: number) => {
                 if (this.triggeredTraps.has(node.id)) return;
                 if (node.type === NodeType.DEFENDER && !this.triggeredTraps.has(node.id)) {
-                    (obj as any).getData('spikeTween')?.setTimeScale(speed);
-                    (obj as any).getData('coreGfx')?.setAlpha(alpha);
+                    obj.getData('spikeTween')?.setTimeScale(speed);
+                    obj.getData('coreGfx')?.setAlpha(alpha);
                 }
             };
 
@@ -839,8 +844,8 @@ export class MainScene extends Phaser.Scene {
                             return;
                         }
                         const pt = path[i], prev = i > 0 ? path[i - 1] : sq;
-                        if (pt.x < (prev as any).x - 2) sq.setFlipX(false);
-                        else if (pt.x > (prev as any).x + 2) sq.setFlipX(true);
+                        if (pt.x < prev.x - 2) sq.setFlipX(false);
+                        else if (pt.x > prev.x + 2) sq.setFlipX(true);
                         
                         const isLast = i === path.length - 1;
                         const dist = Phaser.Math.Distance.Between(sq.x, sq.y, pt.x + (isLast?35:0), pt.y - (isLast?10:0));
@@ -859,7 +864,7 @@ export class MainScene extends Phaser.Scene {
             const obj = this.nodeGraphicsMap.get(e.targetId);
             if (!obj || (this.isFogOfWar && !this.revealedNodes.has(e.targetId))) return;
             const res = applyEffects(this.currentResources, e.effects, this.level.maxResources);
-            res.time >= 0 && res.stamina >= 0 ? this.activeHints.push(this.createMoveMarker((obj as any).x, (obj as any).y)) : this.activeHints.push(this.createUnavailableMarker((obj as any).x, (obj as any).y));
+            res.time >= 0 && res.stamina >= 0 ? this.activeHints.push(this.createMoveMarker(obj.x, obj.y)) : this.activeHints.push(this.createUnavailableMarker(obj.x, obj.y));
         });
     }
 }

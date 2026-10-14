@@ -72,7 +72,7 @@ export function loadCosmetics(): CosmeticsState {
         if (state.unlockedClothes.some(id => id !== 'none')) {
             CLOTH_DEFS.forEach(d => { if (!state.unlockedClothes.includes(d.id)) { state.unlockedClothes.push(d.id); dirty = true; } });
         }
-        if (dirty) try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {}
+        if (dirty) try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* Storage may be disabled; keep the in-memory selection. */ }
         return state;
     } catch {
         return defaultState();

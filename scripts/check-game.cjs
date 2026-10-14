@@ -27,10 +27,10 @@ const fixture = {
     ],
 };
 let result = computeEnergyGame(fixture);
-assert.deepEqual(result.winningBudgets.get(0), [{ time: 2, stamina: 8 }, { time: 8, stamina: 2 }]);
-assert.equal(result.levelWinnable, false, 'A fictitious (2,2) budget must never be reported as winning');
+assert.deepEqual(result.nodeWinningBudgets.get(0), [{ time: 2, stamina: 8 }, { time: 8, stamina: 2 }]);
+assert.equal(result.initialBudgetSufficient, false, 'A fictitious (2,2) budget must never be reported as winning');
 const defender = structuredClone(fixture); defender.nodes[0].type = 'defender';
-assert.deepEqual(computeEnergyGame(defender).winningBudgets.get(0), [{ time: 8, stamina: 8 }], 'Both defender exits must be survivable');
+assert.deepEqual(computeEnergyGame(defender).nodeWinningBudgets.get(0), [{ time: 8, stamina: 8 }], 'Both defender exits must be survivable');
 const capped = structuredClone(fixture); capped.maxResources = { stamina: 5 }; capped.nodes[0].neighbors = [capped.nodes[0].neighbors[0]]; capped.nodes[1].neighbors[0].effects = cost(0, 6);
 assert.equal(computeEnergyGame(capped).minBudget, undefined, 'A refill cap cannot satisfy a larger requirement');
 function playable(level) {
@@ -45,9 +45,9 @@ function playable(level) {
 for (let i = 0; i < 3; i++) {
     const level = playable(load(base + `levels/level${i}.ts`)[`level${i}`]);
     const analysis = computeEnergyGame(level);
-    assert.equal(analysis.analysisComplete, true);
-    assert.equal(analysis.levelWinnable, true, `Trail ${i} must have a guaranteed route with its starting budget`);
-    console.log(`Trail ${i}:`, JSON.stringify(analysis.winningBudgets.get(level.startNodeId)));
+    assert.equal(analysis.converged, true);
+    assert.equal(analysis.initialBudgetSufficient, true, `Trail ${i} must have a guaranteed route with its starting budget`);
+    console.log(`Trail ${i}:`, JSON.stringify(analysis.nodeWinningBudgets.get(level.startNodeId)));
 }
 const third = load(base + 'levels/level3.ts').level3;
 const nodes = new Map(third.nodes.map(n => [n.id, n]));

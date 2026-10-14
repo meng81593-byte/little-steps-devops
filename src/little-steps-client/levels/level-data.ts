@@ -23,6 +23,7 @@ export type PathPoint = {
 
 export type EdgeData = {
     targetId: number;
+    isChase?: boolean;
     effects?: ResourceEffect[];
     pathNodes?: PathPoint[];
     labelOffset?: { x: number; y: number };

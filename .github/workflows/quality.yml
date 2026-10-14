@@ -1,0 +1,69 @@
+name: Quality and container verification
+on:
+  pull_request:
+  push:
+    branches: [main, 'portfolio/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:game
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - name: Build runtime image
+        run: docker build -t little-steps:verify .
+      - name: Verify non-root runtime and production assets
+        run: |
+          docker run -d --name little-steps -p 127.0.0.1:8081:8080 little-steps:verify
+          test "$(docker exec little-steps id -u)" != "0"
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8081/healthz; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8081/healthz
+          curl --fail --silent http://127.0.0.1:8081/ | grep bundle.js
+          curl --fail --silent -o /dev/null http://127.0.0.1:8081/bundle.js
+          curl --fail --silent -o /dev/null http://127.0.0.1:8081/assets/map0.json
+      - name: Run browser tests against Nginx container
+        env:
+          BASE_URL: http://127.0.0.1:8081
+        run: npm run test:e2e
+      - name: Scan runtime image
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: little-steps:verify
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+      - name: Collect container logs
+        if: always()
+        run: docker logs little-steps || true
+      - name: Stop test container
+        if: always()
+        run: docker rm -f little-steps || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-test-evidence
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

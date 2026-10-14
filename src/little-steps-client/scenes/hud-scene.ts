@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import type { MainScene } from './main-scene';
 import { ResourceVector } from '../levels/level-data';
 import { EnergyGameResult, evaluatePerformance } from '../engine/energy-game-engine';
 import { CosmeticsState, COLOR_DEFS, ACCESSORY_DEFS, CLOTH_DEFS, unlockRewardForLevel, saveCosmetics } from '../cosmetics';
@@ -110,13 +111,13 @@ export class HudScene extends Phaser.Scene {
 
         if (resources && initial) {
             // Draw Time Icons (clock) - Centers vertically around y=54 to align with text
-            const timeEndX = this.drawIconBar(
+            this.drawIconBar(
                 this.timeGroup, 78, 30, 'clock',
                 resources.time, preview ? preview.time : null
             );
 
             // Draw Stamina Icons (heart) - Centers vertically around y=84
-            const stamEndX = this.drawIconBar(
+            this.drawIconBar(
                 this.staminaGroup, 78, 56, 'heart',
                 resources.stamina, preview ? preview.stamina : null
             );
@@ -209,17 +210,17 @@ export class HudScene extends Phaser.Scene {
         const final = this.registry.get('finalResources') as ResourceVector;
         const result = this.registry.get('energyGameResult') as EnergyGameResult;
         const levelIndex = (this.registry.get('levelIndex') as number) ?? -1;
-        const feedback = evaluatePerformance(result, initial, final);
+        const feedback = evaluatePerformance(result, initial, final, this.registry.get('goalReached') === true);
         const w = 480, h = 310;
         const bg = this.add.graphics(); drawPixelPanel(bg, w, h);
         const items: Phaser.GameObjects.GameObject[] = [bg];
         const label = (y: number, text: string, size = '15px', color = PANEL_TEXT) => this.add.text(0, y, text, { fontFamily: PIXEL_FONT, fontSize: size, color, align: 'center', fontStyle: 'bold', lineSpacing: 5, wordWrap: { width: w - 64 } }).setOrigin(0.5);
         items.push(label(-112, 'HOME, SAFE AND SOUND', '22px'));
-        items.push(label(-58, 'A bone delivered. A trail completed.', '14px', '#4A6842'));
+        items.push(label(-58, feedback.message, '14px', '#4A6842'));
         items.push(label(-9, `TIME LEFT  ${final.time}     STAM LEFT  ${final.stamina}`));
         const chase = levelIndex === 3;
         const budget = result.minBudget;
-        const note = !chase && budget ? `Fastest guaranteed budget you can afford:\n${budget.time} time / ${budget.stamina} stamina` : 'You balanced your supplies and made it home.';
+        const note = !chase && budget ? `Resource estimate:\n${budget.time} time / ${budget.stamina} stamina` : 'You balanced your supplies and made it home.';
         items.push(label(42, note, '13px', '#77583E'));
         const goMenu = () => { this.registry.events.off('changedata', this.refreshStatus, this); this.scene.stop('MainScene'); this.scene.start('MenuScene'); };
         const menuBtnBg = makePixelButton(this, -145, 109, 122, 'MENU'); menuBtnBg.on('pointerdown', goMenu); items.push(menuBtnBg);
@@ -232,7 +233,7 @@ export class HudScene extends Phaser.Scene {
             const nextBtn = makePixelButton(this, 148, 109, 126, 'NEXT TRAIL');
             nextBtn.on('pointerdown', () => { this.scene.stop('MainScene'); this.scene.start('MainScene', { levelIndex: levelIndex + 1 }); }); items.push(nextBtn);
         }
-        this.winPopup = this.add.container(this.scale.width / 2, this.scale.height / 2, items).setDepth(100).setAlpha(0);
+        this.winPopup = this.add.container(this.scale.width / 2, this.scale.height / 2, items).setName('win-popup').setDepth(100).setAlpha(0);
         this.tweens.add({ targets: this.winPopup, alpha: 1, duration: 240, ease: 'Sine.easeOut' });
     }
 
@@ -259,7 +260,7 @@ export class HudScene extends Phaser.Scene {
         panelItems.push(preview);
         const refreshPreview = () => { applyPuppyPalette(this, preview, mutableState.selectedColor, mutableState.selectedAccessory, mutableState.selectedCloth); preview.play(`puppy-walk-${preview.getData('look')}`); };
         refreshPreview();
-        const notifyMainScene = () => { (this.scene.get('MainScene') as any)?.applyCosmetics?.(); refreshPreview(); };
+        const notifyMainScene = () => { (this.scene.get('MainScene') as MainScene)?.applyCosmetics(); refreshPreview(); };
 
         if (levelIndex === 1) {
             const colors = COLOR_DEFS.filter(c => mutableState.unlockedColors.includes(c.id));
@@ -326,7 +327,7 @@ export class HudScene extends Phaser.Scene {
         const doneBtn = makePixelButton(this, 0, panelH / 2 - 36, 202, 'SAVE & MENU');
         panelItems.push(doneBtn);
 
-        let panel: Phaser.GameObjects.Container;
+        const panel = this.add.container(cx, cy, panelItems).setDepth(201).setAlpha(0);
         doneBtn.on('pointerdown', () => {
             overlay.destroy();
             panel.destroy();
@@ -335,7 +336,6 @@ export class HudScene extends Phaser.Scene {
             this.scene.start('MenuScene');
         });
 
-        panel = this.add.container(cx, cy, panelItems).setDepth(201).setAlpha(0);
         this.tweens.add({ targets: panel, alpha: 1, duration: 300, ease: 'Power2' });
     }
 
