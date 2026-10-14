@@ -58,7 +58,7 @@ jobs:
           BASE_URL: ${{ steps.deployment.outputs.page_url }}
           HEALTH_PATH: healthz.txt
         run: npm run test:e2e
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: published-demo-evidence
