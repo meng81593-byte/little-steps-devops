@@ -24,6 +24,10 @@ jobs:
       IMAGE_URI: ${{ inputs.image_uri }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: npm }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
@@ -63,6 +67,10 @@ jobs:
           curl --fail --retry 5 --retry-delay 3 "$DEMO_URL/healthz"
           curl --fail --silent -o /dev/null "$DEMO_URL/bundle.js"
           printf 'Verified task: %s\nImage: %s\n' "$ACTIVE" "$IMAGE_URI" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify the live game in a browser
+        env:
+          BASE_URL: ${{ vars.DEMO_URL }}
+        run: npm run test:e2e
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -72,4 +80,6 @@ jobs:
             current-task-definition.json
             task-definition.json
             image-evidence.json
+            playwright-report/
+            test-results/
           retention-days: 7

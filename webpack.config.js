@@ -33,6 +33,7 @@ export default {
         new CopyPlugin({
             patterns: [
                 { from: path.resolve(__dirname, 'src/little-steps-client/assets'), to: 'assets' },
+                { from: path.resolve(__dirname, 'public/healthz'), to: 'healthz' },
                 { from: path.resolve(__dirname, 'index.html'), to: 'index.html' }
             ]
         })
