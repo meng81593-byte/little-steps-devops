@@ -14,7 +14,7 @@
     "expose-loader": "^5.0.1",
     "globals": "^17.13.0",
     "ts-loader": "^9.5.4",
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.2",
     "typescript-eslint": "^8.71.2",
     "vitest": "^5.0.4",
     "webpack": "^5.102.1",
