@@ -16,7 +16,7 @@
     "ts-loader": "^9.5.4",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.71.2",
-    "vitest": "^5.0.4",
+    "vitest": "^5.0.5",
     "webpack": "^5.102.1",
     "webpack-cli": "^6.0.1"
   },
